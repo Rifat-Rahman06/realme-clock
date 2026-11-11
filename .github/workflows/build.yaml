@@ -1,8 +1,5 @@
 name: Build Realme X APK
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
+on: [push, workflow_dispatch]
 
 jobs:
   build:
@@ -23,8 +20,31 @@ jobs:
           flutter-version: '3.19.x'
           channel: 'stable'
 
-      - name: Install dependencies
-        run: flutter pub get
+      - name: Setup Official Flutter V2 Android Embedding
+        run: |
+          # 1. Backup our custom native Kotlin and Manifest files
+          mkdir -p custom_backup
+          if [ -f android/app/src/main/kotlin/com/example/realme_alarm_manager/MainActivity.kt ]; then
+            cp android/app/src/main/kotlin/com/example/realme_alarm_manager/MainActivity.kt custom_backup/MainActivity.kt
+          fi
+          if [ -f android/app/src/main/AndroidManifest.xml ]; then
+            cp android/app/src/main/AndroidManifest.xml custom_backup/AndroidManifest.xml
+          fi
+
+          # 2. Generate official modern Flutter V2 Android scaffolding
+          flutter create --org com.example --project-name realme_alarm_manager . --platforms=android --overwrite
+
+          # 3. Restore our custom Realme Clock Kotlin bridge & permissions
+          mkdir -p android/app/src/main/kotlin/com/example/realme_alarm_manager
+          if [ -f custom_backup/MainActivity.kt ]; then
+            cp -f custom_backup/MainActivity.kt android/app/src/main/kotlin/com/example/realme_alarm_manager/MainActivity.kt
+          fi
+          if [ -f custom_backup/AndroidManifest.xml ]; then
+            cp -f custom_backup/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          fi
+
+          # 4. Resolve dependencies
+          flutter pub get
 
       - name: Build Android Release APK
         run: flutter build apk --release --no-tree-shake-icons
