@@ -503,7 +503,7 @@ class _HomeScreenState extends State<HomeScreen> {
             border: Border.all(color: const Color(0xFF334155)),
           ),
           child: Text(
-            val.toString().padStart(2, '0'),
+            val.toString().padLeft(2, '0'),
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: Colors.white),
           ),
@@ -1062,7 +1062,7 @@ class CircularDurationRingDial extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
-                    '${hours}h ${minutes.toString().padStart(2, '0')}m',
+                    '${hours}h ${minutes.toString().padLeft(2, '0')}m',
                     style: const TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.bold,
