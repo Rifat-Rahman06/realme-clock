@@ -42,6 +42,18 @@ class NativeClockService {
       return false;
     }
   }
+
+  static Future<bool> dismissAlarm({required int hour, required int minutes}) async {
+    try {
+      final res = await _channel.invokeMethod<bool>('dismissAlarm', {
+        'hour': hour,
+        'minutes': minutes,
+      });
+      return res ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
 }
 
 // ==========================================
@@ -162,6 +174,18 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   void _deleteSingleAlarm(String groupId, String alarmId) {
+    AlarmItemRecord? target;
+    for (final grp in _alarmGroups) {
+      if (grp.id == groupId) {
+        for (final a in grp.alarms) {
+          if (a.id == alarmId) target = a;
+        }
+      }
+    }
+    if (target != null) {
+      NativeClockService.dismissAlarm(hour: target.hour, minutes: target.minute);
+    }
+
     setState(() {
       for (final grp in _alarmGroups) {
         if (grp.id == groupId) {
@@ -170,15 +194,35 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       }
       _alarmGroups.removeWhere((grp) => grp.alarms.isEmpty);
     });
+    _showDeleteNotice('Alarm removed from manager.');
   }
 
   void _deleteGroup(String groupId) {
+    for (final grp in _alarmGroups) {
+      if (grp.id == groupId) {
+        for (final a in grp.alarms) {
+          NativeClockService.dismissAlarm(hour: a.hour, minutes: a.minute);
+        }
+      }
+    }
     setState(() {
       _alarmGroups.removeWhere((grp) => grp.id == groupId);
     });
+    _showDeleteNotice('Alarm group removed from manager.');
   }
 
   void _deleteSelectedItems() {
+    for (final grp in _alarmGroups) {
+      if (grp.isSelected) {
+        for (final a in grp.alarms) {
+          NativeClockService.dismissAlarm(hour: a.hour, minutes: a.minute);
+        }
+      } else {
+        for (final a in grp.alarms.where((item) => item.isSelected)) {
+          NativeClockService.dismissAlarm(hour: a.hour, minutes: a.minute);
+        }
+      }
+    }
     setState(() {
       for (final grp in _alarmGroups) {
         if (grp.isSelected) {
@@ -189,6 +233,24 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       }
       _alarmGroups.removeWhere((grp) => grp.alarms.isEmpty);
     });
+    _showDeleteNotice('Selected alarms removed from manager.');
+  }
+
+  void _showDeleteNotice(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: const Color(0xFF1E293B),
+        behavior: SnackBarBehavior.floating,
+        action: SnackBarAction(
+          label: 'OPEN CLOCK',
+          textColor: const Color(0xFF60A5FA),
+          onPressed: () => NativeClockService.openClockApp(),
+        ),
+      ),
+    );
   }
 
   @override
@@ -276,17 +338,14 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // Synchronized state
   int _durationHours = 7;
   int _durationMinutes = 0;
   late DateTime _targetTime;
 
-  // Options
   int _totalAlarms = 5;
   int _intervalMinutes = 5;
   bool _isDispatching = false;
 
-  // Quick Presets list
   final List<QuickPresetItem> _presets = [
     QuickPresetItem(label: '1h', hours: 1),
     QuickPresetItem(label: '2h', hours: 2),
@@ -302,7 +361,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _recalculateTargetFromDuration();
   }
 
-  // 1. Duration -> Target Time Sync
   void _recalculateTargetFromDuration() {
     final now = DateTime.now();
     setState(() {
@@ -310,7 +368,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  // 2. Target Time -> Duration Sync
   void _recalculateDurationFromTarget(DateTime newTarget) {
     final now = DateTime.now();
     var diff = newTarget.difference(now);
@@ -354,7 +411,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _recalculateTargetFromDuration();
   }
 
-  // Open Target Time Editor (Hour, Minute, AM/PM)
   void _openTargetTimeEditor() async {
     final now = _targetTime;
     int currentHour12 = now.hour % 12 == 0 ? 12 : now.hour % 12;
@@ -393,7 +449,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      // Hour Selector
                       _buildWheelSelector('Hour', currentHour12, 1, 12, (v) {
                         setModalState(() => currentHour12 = v);
                       }),
@@ -401,12 +456,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         padding: EdgeInsets.symmetric(horizontal: 12),
                         child: Text(':', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
                       ),
-                      // Minute Selector
                       _buildWheelSelector('Minute', currentMinute, 0, 59, (v) {
                         setModalState(() => currentMinute = v);
                       }),
                       const SizedBox(width: 20),
-                      // AM / PM Toggle
                       Column(
                         children: [
                           GestureDetector(
@@ -516,7 +569,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Add Custom Quick Preset Dialog
   void _showAddPresetDialog() {
     int inputHours = 3;
     int inputMinutes = 0;
@@ -606,7 +658,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Dispatch Alarms to Realme Clock and save in Alarms tab
   Future<void> _setTheAlarm() async {
     setState(() => _isDispatching = true);
 
@@ -639,7 +690,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
 
-      // 350ms delay between dispatches for Realme Clock queue stability
       await Future.delayed(const Duration(milliseconds: 350));
     }
 
@@ -773,7 +823,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 16),
 
-                // Realme Clock style Circular Ring Dial
                 CircularDurationRingDial(
                   hours: _durationHours,
                   minutes: _durationMinutes,
@@ -787,7 +836,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 14),
 
-                // Plus / Minus Buttons
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
@@ -878,7 +926,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 20),
 
-          // 5. Quick Presets Section (Directly below Set the Alarm)
+          // 5. Quick Presets Section
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -927,7 +975,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     );
                   }),
-                  // Plus (+) Button to Add Preset
                   InkWell(
                     borderRadius: BorderRadius.circular(12),
                     onTap: _showAddPresetDialog,
@@ -1237,6 +1284,38 @@ class _AlarmsTabScreenState extends State<AlarmsTabScreen> {
 
     return Column(
       children: [
+        // Notice about Android OEM Clock Database separation
+        Container(
+          margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0F172A),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFF1E293B)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.info_outline, size: 16, color: Color(0xFF60A5FA)),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Android prevents apps from directly erasing system clock databases. Tap OPEN to clear in Realme Clock.',
+                  style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8), height: 1.3),
+                ),
+              ),
+              TextButton(
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: () => NativeClockService.openClockApp(),
+                child: const Text('OPEN', style: TextStyle(color: Color(0xFF60A5FA), fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        ),
+
         // Selection & Delete Toolbar
         if (_selectedCount > 0)
           Container(
