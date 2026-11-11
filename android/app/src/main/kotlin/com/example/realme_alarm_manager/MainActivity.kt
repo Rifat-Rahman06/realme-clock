@@ -16,7 +16,6 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.example.realme_alarm/native_clock"
 
-    // Realme / ColorOS China ROM package identifiers
     private val REALME_CLOCK_PACKAGES = arrayOf(
         "com.coloros.alarm",        // Primary Realme X China ROM
         "com.heytap.deskclock",     // Newer Realme UI / HeyTap
@@ -38,6 +37,12 @@ class MainActivity: FlutterActivity() {
 
                     val response = dispatchAlarmIntent(hour, minutes, message, skipUi, vibrate)
                     result.success(response)
+                }
+                "dismissAlarm" -> {
+                    val hour = call.argument<Int>("hour") ?: 0
+                    val minutes = call.argument<Int>("minutes") ?: 0
+                    val dismissed = dispatchDismissAlarmIntent(hour, minutes)
+                    result.success(dismissed)
                 }
                 "openClockApp" -> {
                     val opened = openRealmeClock()
@@ -62,11 +67,6 @@ class MainActivity: FlutterActivity() {
         }
     }
 
-    /**
-     * Dispatches AlarmClock.ACTION_SET_ALARM targeting Realme Clock.
-     * Note: Standard Android API does not return a confirmation callback on whether
-     * the user or Clock app actually saved the alarm.
-     */
     private fun dispatchAlarmIntent(
         hour: Int,
         minutes: Int,
@@ -83,7 +83,6 @@ class MainActivity: FlutterActivity() {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
 
-        // Try to bind explicitly to Realme / ColorOS Clock first if available
         for (pkg in REALME_CLOCK_PACKAGES) {
             val targetedIntent = Intent(intent).setPackage(pkg)
             if (packageManager.resolveActivity(targetedIntent, 0) != null) {
@@ -93,7 +92,7 @@ class MainActivity: FlutterActivity() {
                         "success" to true,
                         "dispatched" to true,
                         "targetPackage" to pkg,
-                        "note" to "Dispatched to $pkg. ColorOS does not return confirmation callback."
+                        "note" to "Dispatched to $pkg."
                     )
                 } catch (e: Exception) {
                     mapOf(
@@ -106,16 +105,10 @@ class MainActivity: FlutterActivity() {
             }
         }
 
-        // Fallback: system chooser or default handler
         if (packageManager.resolveActivity(intent, 0) != null) {
             return try {
                 startActivity(intent)
-                mapOf(
-                    "success" to true,
-                    "dispatched" to true,
-                    "targetPackage" to "android.default",
-                    "note" to "Dispatched to default system clock."
-                )
+                mapOf("success" to true, "dispatched" to true, "targetPackage" to "android.default")
             } catch (e: Exception) {
                 mapOf("success" to false, "dispatched" to false, "error" to e.localizedMessage)
             }
@@ -128,8 +121,39 @@ class MainActivity: FlutterActivity() {
         )
     }
 
+    private fun dispatchDismissAlarmIntent(hour: Int, minutes: Int): Boolean {
+        val intent = Intent(AlarmClock.ACTION_DISMISS_ALARM).apply {
+            putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_TIME)
+            putExtra(AlarmClock.EXTRA_HOUR, hour)
+            putExtra(AlarmClock.EXTRA_MINUTES, minutes)
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+
+        for (pkg in REALME_CLOCK_PACKAGES) {
+            val targetedIntent = Intent(intent).setPackage(pkg)
+            if (packageManager.resolveActivity(targetedIntent, 0) != null) {
+                return try {
+                    startActivity(targetedIntent)
+                    true
+                } catch (e: Exception) {
+                    false
+                }
+            }
+        }
+
+        if (packageManager.resolveActivity(intent, 0) != null) {
+            return try {
+                startActivity(intent)
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+        return false
+    }
+
     private fun openRealmeClock(): Boolean {
-        // Standard Android show alarms intent
         val showAlarmsIntent = Intent(AlarmClock.ACTION_SHOW_ALARMS).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
@@ -138,7 +162,6 @@ class MainActivity: FlutterActivity() {
             return true
         }
 
-        // ColorOS direct launcher fallback
         for (pkg in REALME_CLOCK_PACKAGES) {
             val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
             if (launchIntent != null) {
@@ -171,12 +194,7 @@ class MainActivity: FlutterActivity() {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 }
                 startActivity(intent)
-            } catch (e: Exception) {
-                // Fallback to general battery settings
-                val fallback = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                fallback.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                startActivity(fallback)
-            }
+            } catch (e: Exception) {}
         }
     }
 }
