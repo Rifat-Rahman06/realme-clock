@@ -1,5 +1,8 @@
 name: Build Realme X APK
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -20,35 +23,30 @@ jobs:
           flutter-version: '3.19.x'
           channel: 'stable'
 
-      - name: Setup V2 Android Embedding & Preserve Alarm Manager Code
+      - name: Setup V2 Android Embedding & Scaffolding
         run: |
-          # 1. Back up our custom Alarm Manager code (lib/ and pubspec.yaml)
+          # 1. Back up our custom Alarm Manager application code
           mkdir -p custom_backup
           cp -r lib custom_backup/lib
           cp pubspec.yaml custom_backup/pubspec.yaml
 
-          # Back up custom native Kotlin and Manifest files
           if [ -f android/app/src/main/kotlin/com/example/realme_alarm_manager/MainActivity.kt ]; then
             cp android/app/src/main/kotlin/com/example/realme_alarm_manager/MainActivity.kt custom_backup/MainActivity.kt
-          elif [ -f custom_native/MainActivity.kt ]; then
-            cp custom_native/MainActivity.kt custom_backup/MainActivity.kt
           fi
 
           if [ -f android/app/src/main/AndroidManifest.xml ]; then
             cp android/app/src/main/AndroidManifest.xml custom_backup/AndroidManifest.xml
-          elif [ -f custom_native/AndroidManifest.xml ]; then
-            cp custom_native/AndroidManifest.xml custom_backup/AndroidManifest.xml
           fi
 
-          # 2. Generate official Flutter V2 Android embedding scaffolding
+          # 2. Generate official Flutter V2 Android embedding and Gradle files
           flutter create --org com.example --project-name realme_alarm_manager . --platforms=android --overwrite
 
-          # 3. CRITICAL: Restore our Custom Alarm Manager code (OVERWRITING the demo counter)
+          # 3. CRITICAL: Restore our custom Alarm Manager code (OVERWRITING Flutter's default counter)
           rm -rf lib
           cp -r custom_backup/lib lib
           cp -f custom_backup/pubspec.yaml pubspec.yaml
 
-          # 4. Restore custom Realme Clock Kotlin bridge & permissions
+          # 4. Restore our custom Realme Clock Kotlin bridge & permissions
           mkdir -p android/app/src/main/kotlin/com/example/realme_alarm_manager
           if [ -f custom_backup/MainActivity.kt ]; then
             cp -f custom_backup/MainActivity.kt android/app/src/main/kotlin/com/example/realme_alarm_manager/MainActivity.kt
@@ -57,7 +55,7 @@ jobs:
             cp -f custom_backup/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
           fi
 
-          # 5. Resolve dependencies
+          # 5. Ensure dependencies
           flutter pub get
 
       - name: Build Android Release APK
