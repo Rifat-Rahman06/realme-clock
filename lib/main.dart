@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -338,14 +339,23 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  // Synchronized state
   int _durationHours = 7;
   int _durationMinutes = 0;
   late DateTime _targetTime;
 
-  int _totalAlarms = 5;
-  int _intervalMinutes = 5;
+  // Direct Flutter Wheel Picker Controllers for Actual Alarm Time (Top Header)
+  late FixedExtentScrollController _hourWheelController;
+  late FixedExtentScrollController _minuteWheelController;
+  late FixedExtentScrollController _amPmWheelController;
+  bool _isSyncing = false;
+
+  // Options
+  int _totalAlarms = 4; // Default selected
+  int _intervalMinutes = 5; // Default selected
   bool _isDispatching = false;
 
+  // Presets list (user-editable)
   final List<QuickPresetItem> _presets = [
     QuickPresetItem(label: '1h', hours: 1),
     QuickPresetItem(label: '2h', hours: 2),
@@ -358,217 +368,97 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _recalculateTargetFromDuration();
+    final now = DateTime.now();
+    _targetTime = now.add(Duration(hours: _durationHours, minutes: _durationMinutes));
+
+    final h12 = _targetTime.hour % 12 == 0 ? 12 : _targetTime.hour % 12;
+    _hourWheelController = FixedExtentScrollController(initialItem: h12 - 1);
+    _minuteWheelController = FixedExtentScrollController(initialItem: _targetTime.minute);
+    _amPmWheelController = FixedExtentScrollController(initialItem: _targetTime.hour >= 12 ? 1 : 0);
   }
 
-  void _recalculateTargetFromDuration() {
-    final now = DateTime.now();
-    setState(() {
-      _targetTime = now.add(Duration(hours: _durationHours, minutes: _durationMinutes));
-    });
+  @override
+  void dispose() {
+    _hourWheelController.dispose();
+    _minuteWheelController.dispose();
+    _amPmWheelController.dispose();
+    super.dispose();
   }
 
-  void _recalculateDurationFromTarget(DateTime newTarget) {
+  // 1. Wheel Picker -> Relative Time Sync
+  void _onWheelChanged() {
+    if (_isSyncing) return;
+    _isSyncing = true;
+
+    final hour12 = _hourWheelController.selectedItem + 1; // 1 to 12
+    final minute = _minuteWheelController.selectedItem; // 0 to 59
+    final isPm = _amPmWheelController.selectedItem == 1;
+
+    int hour24 = hour12 % 12;
+    if (isPm) hour24 += 12;
+
     final now = DateTime.now();
-    var diff = newTarget.difference(now);
-    if (diff.isNegative) {
+    var newTarget = DateTime(now.year, now.month, now.day, hour24, minute);
+    if (newTarget.isBefore(now)) {
       newTarget = newTarget.add(const Duration(days: 1));
-      diff = newTarget.difference(now);
     }
 
+    final diff = newTarget.difference(now);
     final totalMins = diff.inMinutes;
+
     setState(() {
       _targetTime = newTarget;
-      _durationHours = (totalMins / 60).floor().clamp(0, 24);
-      _durationMinutes = (totalMins % 60).clamp(0, 59);
+      _durationHours = (totalMins / 60).floor().clamp(1, 12);
+      final rawM = totalMins % 60;
+      _durationMinutes = ((rawM / 5).round() * 5).clamp(0, 60);
     });
+
+    _isSyncing = false;
   }
 
-  void _adjustHours(int delta) {
-    final newH = (_durationHours + delta).clamp(0, 24);
-    setState(() => _durationHours = newH);
-    _recalculateTargetFromDuration();
-  }
+  // 2. Relative Time -> Wheel Picker Sync
+  void _syncTargetFromDuration() {
+    if (_isSyncing) return;
+    _isSyncing = true;
 
-  void _adjustMinutes(int delta) {
-    var newM = _durationMinutes + delta;
-    var newH = _durationHours;
-    if (newM >= 60) {
-      newM = 0;
-      newH = (newH + 1).clamp(0, 24);
-    } else if (newM < 0) {
-      if (newH > 0) {
-        newM = 55;
-        newH -= 1;
-      } else {
-        newM = 0;
-      }
-    }
+    final now = DateTime.now();
+    final newTarget = now.add(Duration(hours: _durationHours, minutes: _durationMinutes));
+
     setState(() {
-      _durationMinutes = newM;
-      _durationHours = newH;
+      _targetTime = newTarget;
     });
-    _recalculateTargetFromDuration();
+
+    final h12 = newTarget.hour % 12 == 0 ? 12 : newTarget.hour % 12;
+    final hIndex = h12 - 1;
+    final mIndex = newTarget.minute;
+    final amPmIndex = newTarget.hour >= 12 ? 1 : 0;
+
+    if (_hourWheelController.hasClients && _hourWheelController.selectedItem != hIndex) {
+      _hourWheelController.animateToItem(
+        hIndex,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    }
+    if (_minuteWheelController.hasClients && _minuteWheelController.selectedItem != mIndex) {
+      _minuteWheelController.animateToItem(
+        mIndex,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    }
+    if (_amPmWheelController.hasClients && _amPmWheelController.selectedItem != amPmIndex) {
+      _amPmWheelController.animateToItem(
+        amPmIndex,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    }
+
+    _isSyncing = false;
   }
 
-  void _openTargetTimeEditor() async {
-    final now = _targetTime;
-    int currentHour12 = now.hour % 12 == 0 ? 12 : now.hour % 12;
-    int currentMinute = now.minute;
-    bool isPm = now.hour >= 12;
-
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF0F172A),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'Edit Target Wakeup Time',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Color(0xFF64748B)),
-                        onPressed: () => Navigator.pop(ctx),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      _buildWheelSelector('Hour', currentHour12, 1, 12, (v) {
-                        setModalState(() => currentHour12 = v);
-                      }),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 12),
-                        child: Text(':', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
-                      ),
-                      _buildWheelSelector('Minute', currentMinute, 0, 59, (v) {
-                        setModalState(() => currentMinute = v);
-                      }),
-                      const SizedBox(width: 20),
-                      Column(
-                        children: [
-                          GestureDetector(
-                            onTap: () => setModalState(() => isPm = false),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                              decoration: BoxDecoration(
-                                color: !isPm ? const Color(0xFF3B82F6) : const Color(0xFF1E293B),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Text(
-                                'AM',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: !isPm ? Colors.white : const Color(0xFF64748B),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          GestureDetector(
-                            onTap: () => setModalState(() => isPm = true),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                              decoration: BoxDecoration(
-                                color: isPm ? const Color(0xFF3B82F6) : const Color(0xFF1E293B),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Text(
-                                'PM',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: isPm ? Colors.white : const Color(0xFF64748B),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 28),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3B82F6),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    onPressed: () {
-                      int calculatedHour = currentHour12 % 12;
-                      if (isPm) calculatedHour += 12;
-
-                      final baseDate = DateTime.now();
-                      DateTime updated = DateTime(
-                        baseDate.year,
-                        baseDate.month,
-                        baseDate.day,
-                        calculatedHour,
-                        currentMinute,
-                      );
-
-                      if (updated.isBefore(baseDate)) {
-                        updated = updated.add(const Duration(days: 1));
-                      }
-
-                      _recalculateDurationFromTarget(updated);
-                      Navigator.pop(ctx);
-                    },
-                    child: const Text('Apply Target Time', style: TextStyle(fontWeight: FontWeight.bold)),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildWheelSelector(String label, int val, int min, int max, Function(int) onChange) {
-    return Column(
-      children: [
-        IconButton(
-          icon: const Icon(Icons.keyboard_arrow_up, color: Color(0xFF60A5FA)),
-          onPressed: () => onChange(val >= max ? min : val + 1),
-        ),
-        Container(
-          width: 64,
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E293B),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF334155)),
-          ),
-          child: Text(
-            val.toString().padLeft(2, '0'),
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: Colors.white),
-          ),
-        ),
-        IconButton(
-          icon: const Icon(Icons.keyboard_arrow_down, color: Color(0xFF60A5FA)),
-          onPressed: () => onChange(val <= min ? max : val - 1),
-        ),
-      ],
-    );
-  }
-
+  // Add Custom Quick Preset Dialog
   void _showAddPresetDialog() {
     int inputHours = 3;
     int inputMinutes = 0;
@@ -607,7 +497,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           DropdownButton<int>(
                             value: inputHours,
                             dropdownColor: const Color(0xFF1E293B),
-                            items: List.generate(24, (i) => i + 1)
+                            items: List.generate(12, (i) => i + 1)
                                 .map((h) => DropdownMenuItem(value: h, child: Text('$h hrs')))
                                 .toList(),
                             onChanged: (v) => setDialogState(() => inputHours = v ?? 1),
@@ -658,6 +548,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // Dispatch Alarms to Realme Clock and save in Alarms tab
   Future<void> _setTheAlarm() async {
     setState(() => _isDispatching = true);
 
@@ -690,6 +581,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
 
+      // Stagger delay for Realme Clock queue stability
       await Future.delayed(const Duration(milliseconds: 350));
     }
 
@@ -717,9 +609,158 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // 3. Total Number of Alarms: 6 rectangular selector-style tabs
+  Widget _buildTotalAlarmsSelector() {
+    final options = [1, 2, 3, 4, 5, 6];
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF1E293B)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'TOTAL ALARMS',
+            style: TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: options.map((count) {
+              final isSelected = _totalAlarms == count;
+              return Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: GestureDetector(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      setState(() => _totalAlarms = count);
+                    },
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF1E293B),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: isSelected ? const Color(0xFF60A5FA) : const Color(0xFF334155),
+                          width: isSelected ? 1.5 : 1.0,
+                        ),
+                        boxShadow: isSelected
+                            ? [
+                                BoxShadow(
+                                  color: const Color(0xFF2563EB).withOpacity(0.35),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${count}x',
+                          style: TextStyle(
+                            color: isSelected ? Colors.white : const Color(0xFF94A3B8),
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 4. Alarm Interval: 5 rectangular selector-style tabs
+  Widget _buildIntervalSelector() {
+    final intervals = [2, 3, 5, 10, 15];
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF1E293B)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'ALARM INTERVAL',
+            style: TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: intervals.map((mins) {
+              final isSelected = _intervalMinutes == mins;
+              return Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: GestureDetector(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      setState(() => _intervalMinutes = mins);
+                    },
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF1E293B),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: isSelected ? const Color(0xFF60A5FA) : const Color(0xFF334155),
+                          width: isSelected ? 1.5 : 1.0,
+                        ),
+                        boxShadow: isSelected
+                            ? [
+                                BoxShadow(
+                                  color: const Color(0xFF2563EB).withOpacity(0.35),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${mins}m',
+                          style: TextStyle(
+                            color: isSelected ? Colors.white : const Color(0xFF94A3B8),
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final timeFormat = DateFormat('hh:mm a');
     final dateFormat = DateFormat('EEE, MMM d');
 
     return SingleChildScrollView(
@@ -727,75 +768,9 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 1. Target Wakeup Time Section (Editable)
-          GestureDetector(
-            onTap: _openTargetTimeEditor,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0F172A),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFF1E293B), width: 1.5),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'TARGET WAKEUP TIME',
-                        style: TextStyle(
-                          color: Color(0xFF64748B),
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.2,
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1E293B),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Row(
-                          children: [
-                            Icon(Icons.edit_outlined, size: 12, color: Color(0xFF60A5FA)),
-                            SizedBox(width: 4),
-                            Text('Tap to edit', style: TextStyle(color: Color(0xFF60A5FA), fontSize: 11)),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    timeFormat.format(_targetTime),
-                    style: const TextStyle(
-                      fontSize: 44,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                      fontFamily: 'monospace',
-                      letterSpacing: -1,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    dateFormat.format(_targetTime),
-                    style: const TextStyle(
-                      color: Color(0xFF60A5FA),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 18),
-
-          // 2 & 3. Relative Sleep Duration & Circular Ring Dial
+          // 1. Actual Alarm Time (Top Header) with Direct Embedded Wheel Picker
           Container(
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
             decoration: BoxDecoration(
               color: const Color(0xFF0F172A),
               borderRadius: BorderRadius.circular(20),
@@ -803,11 +778,11 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             child: Column(
               children: [
-                const Row(
+                Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'RELATIVE SLEEP DURATION',
+                    const Text(
+                      'ACTUAL ALARM TIME',
                       style: TextStyle(
                         color: Color(0xFF64748B),
                         fontSize: 11,
@@ -816,88 +791,303 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                     Text(
-                      'Synchronized',
-                      style: TextStyle(color: Color(0xFF3B82F6), fontSize: 11, fontWeight: FontWeight.bold),
+                      dateFormat.format(_targetTime),
+                      style: const TextStyle(
+                        color: Color(0xFF60A5FA),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
-
-                CircularDurationRingDial(
-                  hours: _durationHours,
-                  minutes: _durationMinutes,
-                  onDurationChanged: (h, m) {
-                    setState(() {
-                      _durationHours = h;
-                      _durationMinutes = m;
-                    });
-                    _recalculateTargetFromDuration();
-                  },
-                ),
-                const SizedBox(height: 14),
-
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _buildStepperBox(
-                      label: 'Hours',
-                      value: _durationHours,
-                      suffix: 'h',
-                      onMinus: () => _adjustHours(-1),
-                      onPlus: () => _adjustHours(1),
-                    ),
-                    _buildStepperBox(
-                      label: 'Minutes',
-                      value: _durationMinutes,
-                      suffix: 'm',
-                      onMinus: () => _adjustMinutes(-5),
-                      onPlus: () => _adjustMinutes(5),
-                    ),
-                  ],
+                const SizedBox(height: 12),
+                // Directly embedded 3-column Flutter Wheel Picker
+                SizedBox(
+                  height: 116,
+                  child: Row(
+                    children: [
+                      // Hour Wheel (1 - 12)
+                      Expanded(
+                        flex: 3,
+                        child: CupertinoPicker(
+                          itemExtent: 36,
+                          scrollController: _hourWheelController,
+                          selectionOverlay: Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF2563EB).withOpacity(0.18),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.symmetric(
+                                horizontal: BorderSide(color: const Color(0xFF3B82F6).withOpacity(0.4), width: 1),
+                              ),
+                            ),
+                          ),
+                          onSelectedItemChanged: (index) {
+                            HapticFeedback.selectionClick();
+                            _onWheelChanged();
+                          },
+                          children: List.generate(12, (i) {
+                            final val = (i + 1).toString().padLeft(2, '0');
+                            return Center(
+                              child: Text(
+                                val,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'monospace',
+                                ),
+                              ),
+                            );
+                          }),
+                        ),
+                      ),
+                      const SizedBox(
+                        width: 14,
+                        child: Center(
+                          child: Text(
+                            ':',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF60A5FA),
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Minute Wheel (00 - 59)
+                      Expanded(
+                        flex: 3,
+                        child: CupertinoPicker(
+                          itemExtent: 36,
+                          scrollController: _minuteWheelController,
+                          selectionOverlay: Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF2563EB).withOpacity(0.18),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.symmetric(
+                                horizontal: BorderSide(color: const Color(0xFF3B82F6).withOpacity(0.4), width: 1),
+                              ),
+                            ),
+                          ),
+                          onSelectedItemChanged: (index) {
+                            HapticFeedback.selectionClick();
+                            _onWheelChanged();
+                          },
+                          children: List.generate(60, (i) {
+                            final val = i.toString().padLeft(2, '0');
+                            return Center(
+                              child: Text(
+                                val,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'monospace',
+                                ),
+                              ),
+                            );
+                          }),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // AM / PM Wheel
+                      Expanded(
+                        flex: 2,
+                        child: CupertinoPicker(
+                          itemExtent: 36,
+                          scrollController: _amPmWheelController,
+                          selectionOverlay: Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF2563EB).withOpacity(0.18),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.symmetric(
+                                horizontal: BorderSide(color: const Color(0xFF3B82F6).withOpacity(0.4), width: 1),
+                              ),
+                            ),
+                          ),
+                          onSelectedItemChanged: (index) {
+                            HapticFeedback.selectionClick();
+                            _onWheelChanged();
+                          },
+                          children: const [
+                            Center(
+                              child: Text(
+                                'AM',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            Center(
+                              child: Text(
+                                'PM',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
           const SizedBox(height: 18),
 
-          // 4. Total Alarms & Interval
+          // 2. Relative Time Selector (Side by side Hour & Minute with Stepped Sliders)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
               color: const Color(0xFF0F172A),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: const Color(0xFF1E293B)),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFF1E293B), width: 1.5),
             ),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Total Alarms', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
-                    DropdownButton<int>(
-                      value: _totalAlarms,
-                      dropdownColor: const Color(0xFF1E293B),
-                      underline: const SizedBox(),
-                      items: [1, 2, 3, 5, 8, 10]
-                          .map((val) => DropdownMenuItem(value: val, child: Text('$val alarms', style: const TextStyle(color: Color(0xFF60A5FA)))))
-                          .toList(),
-                      onChanged: (v) => setState(() => _totalAlarms = v ?? 5),
-                    ),
-                  ],
+                const Text(
+                  'RELATIVE TIME',
+                  style: TextStyle(
+                    color: Color(0xFF64748B),
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                  ),
                 ),
-                const Divider(color: Color(0xFF1E293B), height: 16),
+                const SizedBox(height: 14),
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Alarm Interval', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
-                    DropdownButton<int>(
-                      value: _intervalMinutes,
-                      dropdownColor: const Color(0xFF1E293B),
-                      underline: const SizedBox(),
-                      items: [2, 3, 5, 10, 15]
-                          .map((val) => DropdownMenuItem(value: val, child: Text('$val minutes', style: const TextStyle(color: Color(0xFF60A5FA)))))
-                          .toList(),
-                      onChanged: (v) => setState(() => _intervalMinutes = v ?? 5),
+                    // Hour Selector (Left)
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF131B2E),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: const Color(0xFF1E293B)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text('HOUR', style: TextStyle(color: Color(0xFF64748B), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.1)),
+                                Text('${_durationHours}h', style: const TextStyle(color: Color(0xFF60A5FA), fontSize: 18, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                trackHeight: 4,
+                                activeTrackColor: const Color(0xFF3B82F6),
+                                inactiveTrackColor: const Color(0xFF1E293B),
+                                thumbColor: const Color(0xFF60A5FA),
+                                overlayColor: const Color(0xFF3B82F6).withOpacity(0.15),
+                                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                                tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 2),
+                                activeTickMarkColor: Colors.white70,
+                                inactiveTickMarkColor: const Color(0xFF334155),
+                              ),
+                              child: Slider(
+                                value: _durationHours.toDouble().clamp(1.0, 12.0),
+                                min: 1.0,
+                                max: 12.0,
+                                divisions: 11,
+                                onChanged: (val) {
+                                  HapticFeedback.selectionClick();
+                                  final newH = val.round();
+                                  if (newH != _durationHours) {
+                                    setState(() => _durationHours = newH);
+                                    _syncTargetFromDuration();
+                                  }
+                                },
+                              ),
+                            ),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 4),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text('1h', style: TextStyle(color: Color(0xFF64748B), fontSize: 9)),
+                                  Text('6h', style: TextStyle(color: Color(0xFF64748B), fontSize: 9)),
+                                  Text('12h', style: TextStyle(color: Color(0xFF64748B), fontSize: 9)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    // Minute Selector (Right)
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF131B2E),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: const Color(0xFF1E293B)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text('MINUTE', style: TextStyle(color: Color(0xFF64748B), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.1)),
+                                Text('${_durationMinutes.toString().padLeft(2, '0')}m', style: const TextStyle(color: Color(0xFF60A5FA), fontSize: 18, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                trackHeight: 4,
+                                activeTrackColor: const Color(0xFF3B82F6),
+                                inactiveTrackColor: const Color(0xFF1E293B),
+                                thumbColor: const Color(0xFF60A5FA),
+                                overlayColor: const Color(0xFF3B82F6).withOpacity(0.15),
+                                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                                tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 2),
+                                activeTickMarkColor: Colors.white70,
+                                inactiveTickMarkColor: const Color(0xFF334155),
+                              ),
+                              child: Slider(
+                                value: _durationMinutes.toDouble().clamp(0.0, 60.0),
+                                min: 0.0,
+                                max: 60.0,
+                                divisions: 12,
+                                onChanged: (val) {
+                                  HapticFeedback.selectionClick();
+                                  final newM = (val / 5).round() * 5;
+                                  if (newM != _durationMinutes) {
+                                    setState(() => _durationMinutes = newM);
+                                    _syncTargetFromDuration();
+                                  }
+                                },
+                              ),
+                            ),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 4),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text('0m', style: TextStyle(color: Color(0xFF64748B), fontSize: 9)),
+                                  Text('30m', style: TextStyle(color: Color(0xFF64748B), fontSize: 9)),
+                                  Text('60m', style: TextStyle(color: Color(0xFF64748B), fontSize: 9)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -906,7 +1096,15 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 18),
 
-          // "Set the Alarm" Button
+          // 3. Total Number of Alarms Selector (6 rectangular selector tabs)
+          _buildTotalAlarmsSelector(),
+          const SizedBox(height: 18),
+
+          // 4. Alarm Interval Selector (5 rectangular selector tabs)
+          _buildIntervalSelector(),
+          const SizedBox(height: 22),
+
+          // 5. Set Alarm Button
           ElevatedButton(
             onPressed: _isDispatching ? null : _setTheAlarm,
             style: ElevatedButton.styleFrom(
@@ -920,13 +1118,13 @@ class _HomeScreenState extends State<HomeScreen> {
             child: _isDispatching
                 ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
                 : const Text(
-                    'Set the Alarm',
+                    'Set Alarm',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, letterSpacing: 0.3),
                   ),
           ),
           const SizedBox(height: 20),
 
-          // 5. Quick Presets Section
+          // Quick Presets Section (Directly below Set Alarm)
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -953,7 +1151,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           _durationHours = preset.hours;
                           _durationMinutes = preset.minutes;
                         });
-                        _recalculateTargetFromDuration();
+                        _syncTargetFromDuration();
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -975,6 +1173,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     );
                   }),
+                  // Plus (+) Button to Add Preset
                   InkWell(
                     borderRadius: BorderRadius.circular(12),
                     onTap: _showAddPresetDialog,
@@ -1005,468 +1204,6 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 24),
         ],
       ),
-    );
-  }
-
-  Widget _buildStepperBox({
-    required String label,
-    required int value,
-    required String suffix,
-    required VoidCallback onMinus,
-    required VoidCallback onPlus,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        children: [
-          InkWell(
-            onTap: onMinus,
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              padding: const EdgeInsets.all(6),
-              decoration: const BoxDecoration(color: Color(0xFF0F172A), shape: BoxShape.circle),
-              child: const Icon(Icons.remove, size: 16, color: Color(0xFF60A5FA)),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Column(
-              children: [
-                Text(
-                  '$value$suffix',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white, fontFamily: 'monospace'),
-                ),
-                Text(label, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
-              ],
-            ),
-          ),
-          InkWell(
-            onTap: onPlus,
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              padding: const EdgeInsets.all(6),
-              decoration: const BoxDecoration(color: Color(0xFF0F172A), shape: BoxShape.circle),
-              child: const Icon(Icons.add, size: 16, color: Color(0xFF60A5FA)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ==========================================
-// 3. Circular Ring-Style Time Gesture Dial
-// ==========================================
-class CircularDurationRingDial extends StatelessWidget {
-  final int hours;
-  final int minutes;
-  final Function(int, int) onDurationChanged;
-
-  const CircularDurationRingDial({
-    super.key,
-    required this.hours,
-    required this.minutes,
-    required this.onDurationChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final totalMinutes = (hours * 60 + minutes).clamp(0, 1440);
-    final progress = (totalMinutes % 720) / 720.0;
-
-    return GestureDetector(
-      onPanUpdate: (details) {
-        final RenderBox box = context.findRenderObject() as RenderBox;
-        final center = box.size.center(Offset.zero);
-        final position = details.localPosition;
-        final touchPoint = position - center;
-
-        double angle = math.atan2(touchPoint.dy, touchPoint.dx) + (math.pi / 2);
-        if (angle < 0) angle += 2 * math.pi;
-
-        final rawProgress = angle / (2 * math.pi);
-        final calculatedMins = (rawProgress * 720).round();
-
-        final roundedMins = (calculatedMins / 5).round() * 5;
-        final newH = (hours >= 12 ? 12 : 0) + (roundedMins / 60).floor();
-        final newM = roundedMins % 60;
-
-        onDurationChanged(newH.clamp(0, 24), newM.clamp(0, 59));
-      },
-      child: Center(
-        child: SizedBox(
-          width: 170,
-          height: 170,
-          child: CustomPaint(
-            painter: RingDialPainter(progress: progress),
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    '${hours}h ${minutes.toString().padLeft(2, '0')}m',
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  const Text(
-                    'Slide to adjust',
-                    style: TextStyle(fontSize: 10, color: Color(0xFF64748B)),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class RingDialPainter extends CustomPainter {
-  final double progress;
-  RingDialPainter({required this.progress});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = (size.width / 2) - 14;
-
-    final trackPaint = Paint()
-      ..color = const Color(0xFF1E293B)
-      ..strokeWidth = 10
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    canvas.drawCircle(center, radius, trackPaint);
-
-    final activePaint = Paint()
-      ..shader = const SweepGradient(
-        colors: [Color(0xFF2563EB), Color(0xFF60A5FA)],
-        startAngle: 0.0,
-        endAngle: math.pi * 2,
-      ).createShader(Rect.fromCircle(center: center, radius: radius))
-      ..strokeWidth = 10
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    final startAngle = -math.pi / 2;
-    final sweepAngle = (2 * math.pi) * progress.clamp(0.01, 1.0);
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      startAngle,
-      sweepAngle,
-      false,
-      activePaint,
-    );
-
-    final thumbAngle = startAngle + sweepAngle;
-    final thumbX = center.dx + radius * math.cos(thumbAngle);
-    final thumbY = center.dy + radius * math.sin(thumbAngle);
-
-    final thumbPaint = Paint()..color = const Color(0xFF60A5FA);
-    final thumbBorder = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 2.5
-      ..style = PaintingStyle.stroke;
-
-    canvas.drawCircle(Offset(thumbX, thumbY), 8, thumbPaint);
-    canvas.drawCircle(Offset(thumbX, thumbY), 8, thumbBorder);
-  }
-
-  @override
-  bool shouldRepaint(covariant RingDialPainter oldDelegate) => oldDelegate.progress != progress;
-}
-
-// ==========================================
-// Tab 2: Alarms Tab (Group-Based Management)
-// ==========================================
-class AlarmsTabScreen extends StatefulWidget {
-  final List<AlarmGroupRecord> groups;
-  final Function(String, String) onDeleteAlarm;
-  final Function(String) onDeleteGroup;
-  final VoidCallback onDeleteSelected;
-
-  const AlarmsTabScreen({
-    super.key,
-    required this.groups,
-    required this.onDeleteAlarm,
-    required this.onDeleteGroup,
-    required this.onDeleteSelected,
-  });
-
-  @override
-  State<AlarmsTabScreen> createState() => _AlarmsTabScreenState();
-}
-
-class _AlarmsTabScreenState extends State<AlarmsTabScreen> {
-  int get _selectedCount {
-    int count = 0;
-    for (final grp in widget.groups) {
-      if (grp.isSelected) {
-        count += grp.alarms.length;
-      } else {
-        count += grp.alarms.where((a) => a.isSelected).length;
-      }
-    }
-    return count;
-  }
-
-  void _toggleGroupSelection(AlarmGroupRecord grp, bool? value) {
-    setState(() {
-      grp.isSelected = value ?? false;
-      for (final a in grp.alarms) {
-        a.isSelected = grp.isSelected;
-      }
-    });
-  }
-
-  void _toggleAlarmSelection(AlarmGroupRecord grp, AlarmItemRecord alm, bool? value) {
-    setState(() {
-      alm.isSelected = value ?? false;
-      grp.isSelected = grp.alarms.every((a) => a.isSelected);
-    });
-  }
-
-  void _selectAll(bool select) {
-    setState(() {
-      for (final grp in widget.groups) {
-        grp.isSelected = select;
-        for (final a in grp.alarms) {
-          a.isSelected = select;
-        }
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (widget.groups.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: const BoxDecoration(
-                  color: Color(0xFF0F172A),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.alarm_off_outlined, size: 48, color: Color(0xFF64748B)),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'No Alarms Set',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-              ),
-              const SizedBox(height: 6),
-              const Text(
-                'Create alarms in the Home tab to delegate them to your Realme Clock.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return Column(
-      children: [
-        // Notice about Android OEM Clock Database separation
-        Container(
-          margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0F172A),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF1E293B)),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.info_outline, size: 16, color: Color(0xFF60A5FA)),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Text(
-                  'Android prevents apps from directly erasing system clock databases. Tap OPEN to clear in Realme Clock.',
-                  style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8), height: 1.3),
-                ),
-              ),
-              TextButton(
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                onPressed: () => NativeClockService.openClockApp(),
-                child: const Text('OPEN', style: TextStyle(color: Color(0xFF60A5FA), fontSize: 11, fontWeight: FontWeight.bold)),
-              ),
-            ],
-          ),
-        ),
-
-        // Selection & Delete Toolbar
-        if (_selectedCount > 0)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            color: const Color(0xFF1E293B),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  '$_selectedCount selected',
-                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13),
-                ),
-                Row(
-                  children: [
-                    TextButton(
-                      onPressed: () => _selectAll(false),
-                      child: const Text('Deselect', style: TextStyle(color: Color(0xFF64748B))),
-                    ),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFDC2626),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      ),
-                      icon: const Icon(Icons.delete_outline, size: 16),
-                      label: const Text('Delete'),
-                      onPressed: widget.onDeleteSelected,
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-
-        // Group List
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            itemCount: widget.groups.length,
-            itemBuilder: (ctx, index) {
-              final group = widget.groups[index];
-              return Container(
-                margin: const EdgeInsets.only(bottom: 14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0F172A),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: group.isSelected ? const Color(0xFF3B82F6) : const Color(0xFF1E293B),
-                    width: 1.5,
-                  ),
-                ),
-                child: Column(
-                  children: [
-                    // Group Header Row
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF131B2E),
-                        borderRadius: BorderRadius.vertical(top: Radius.circular(17)),
-                      ),
-                      child: Row(
-                        children: [
-                          Checkbox(
-                            value: group.isSelected,
-                            activeColor: const Color(0xFF3B82F6),
-                            onChanged: (val) => _toggleGroupSelection(group, val),
-                          ),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  group.title,
-                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
-                                ),
-                                Text(
-                                  'First: ${group.initialTargetTime} · ${group.intervalMinutes}m interval',
-                                  style: const TextStyle(fontSize: 11, color: Color(0xFF60A5FA)),
-                                ),
-                              ],
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.delete_sweep_outlined, color: Color(0xFFEF4444), size: 20),
-                            tooltip: 'Delete Group',
-                            onPressed: () => widget.onDeleteGroup(group.id),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    // Child Alarms List
-                    ListView.separated(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: group.alarms.length,
-                      separatorBuilder: (_, __) => const Divider(color: Color(0xFF1E293B), height: 1),
-                      itemBuilder: (context, aIndex) {
-                        final alarm = group.alarms[aIndex];
-                        return ListTile(
-                          dense: true,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-                          leading: Checkbox(
-                            value: alarm.isSelected,
-                            activeColor: const Color(0xFF3B82F6),
-                            onChanged: (val) => _toggleAlarmSelection(group, alarm, val),
-                          ),
-                          title: Row(
-                            children: [
-                              Text(
-                                alarm.displayTime,
-                                style: const TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                  fontFamily: 'monospace',
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF1E293B),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  '#${alarm.sequenceIndex} of ${alarm.totalInGroup}',
-                                  style: const TextStyle(fontSize: 10, color: Color(0xFF64748B)),
-                                ),
-                              ),
-                            ],
-                          ),
-                          subtitle: Text(
-                            alarm.dateText,
-                            style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
-                          ),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.close, color: Color(0xFF64748B), size: 18),
-                            tooltip: 'Delete Alarm',
-                            onPressed: () => widget.onDeleteAlarm(group.id, alarm.id),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ),
-      ],
     );
   }
 }
