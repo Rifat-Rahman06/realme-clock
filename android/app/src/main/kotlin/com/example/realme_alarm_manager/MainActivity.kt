@@ -41,8 +41,9 @@ class MainActivity: FlutterActivity() {
                 "dismissAlarm" -> {
                     val hour = call.argument<Int>("hour") ?: 0
                     val minutes = call.argument<Int>("minutes") ?: 0
-                    val dismissed = dispatchDismissAlarmIntent(hour, minutes)
-                    result.success(dismissed)
+                    val isPm = call.argument<Boolean>("isPm") ?: (hour >= 12)
+                    val response = dispatchDismissAlarmIntent(hour, minutes, isPm)
+                    result.success(response)
                 }
                 "openClockApp" -> {
                     val opened = openRealmeClock()
@@ -121,11 +122,13 @@ class MainActivity: FlutterActivity() {
         )
     }
 
-    private fun dispatchDismissAlarmIntent(hour: Int, minutes: Int): Boolean {
+    private fun dispatchDismissAlarmIntent(hour: Int, minutes: Int, isPm: Boolean): Map<String, Any> {
         val intent = Intent(AlarmClock.ACTION_DISMISS_ALARM).apply {
             putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_TIME)
             putExtra(AlarmClock.EXTRA_HOUR, hour)
             putExtra(AlarmClock.EXTRA_MINUTES, minutes)
+            // Disambiguates 12-hour clock apps. false = AM, true = PM.
+            putExtra(AlarmClock.EXTRA_IS_PM, isPm)
             putExtra(AlarmClock.EXTRA_SKIP_UI, true)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
@@ -135,9 +138,17 @@ class MainActivity: FlutterActivity() {
             if (packageManager.resolveActivity(targetedIntent, 0) != null) {
                 return try {
                     startActivity(targetedIntent)
-                    true
+                    mapOf(
+                        "success" to true,
+                        "targetPackage" to pkg,
+                        "note" to "Dismiss request sent to $pkg. Verify in the Clock app."
+                    )
                 } catch (e: Exception) {
-                    false
+                    mapOf(
+                        "success" to false,
+                        "targetPackage" to pkg,
+                        "error" to (e.localizedMessage ?: "Failed to start dismiss intent")
+                    )
                 }
             }
         }
@@ -145,12 +156,16 @@ class MainActivity: FlutterActivity() {
         if (packageManager.resolveActivity(intent, 0) != null) {
             return try {
                 startActivity(intent)
-                true
+                mapOf("success" to true, "targetPackage" to "android.default")
             } catch (e: Exception) {
-                false
+                mapOf("success" to false, "error" to (e.localizedMessage ?: "Failed to start dismiss intent"))
             }
         }
-        return false
+
+        return mapOf(
+            "success" to false,
+            "error" to "No compatible Clock application found to dismiss this alarm."
+        )
     }
 
     private fun openRealmeClock(): Boolean {

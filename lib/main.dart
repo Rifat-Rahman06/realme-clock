@@ -1,119 +1,14 @@
-import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
+import 'database/alarm_database.dart';
+import 'models/alarm_models.dart';
+import 'services/native_clock_service.dart';
+
 void main() {
   runApp(const RealmeAlarmApp());
-}
-
-// ==========================================
-// Native Realme Clock Platform Bridge
-// ==========================================
-class NativeClockService {
-  static const MethodChannel _channel = MethodChannel('com.example.realme_alarm/native_clock');
-
-  static Future<Map<String, dynamic>> setAlarm({
-    required int hour,
-    required int minutes,
-    required String message,
-    bool skipUi = true,
-    bool vibrate = true,
-  }) async {
-    try {
-      final result = await _channel.invokeMethod<Map<dynamic, dynamic>>('setAlarm', {
-        'hour': hour,
-        'minutes': minutes,
-        'message': message,
-        'skipUi': skipUi,
-        'vibrate': vibrate,
-      });
-      return Map<String, dynamic>.from(result ?? {});
-    } catch (e) {
-      return {'success': false, 'error': e.toString()};
-    }
-  }
-
-  static Future<bool> openClockApp() async {
-    try {
-      final res = await _channel.invokeMethod<bool>('openClockApp');
-      return res ?? false;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  static Future<bool> dismissAlarm({required int hour, required int minutes}) async {
-    try {
-      final res = await _channel.invokeMethod<bool>('dismissAlarm', {
-        'hour': hour,
-        'minutes': minutes,
-      });
-      return res ?? false;
-    } catch (_) {
-      return false;
-    }
-  }
-}
-
-// ==========================================
-// Data Models
-// ==========================================
-class AlarmItemRecord {
-  final String id;
-  final int hour;
-  final int minute;
-  final String displayTime;
-  final String dateText;
-  final int sequenceIndex;
-  final int totalInGroup;
-  bool isSelected;
-
-  AlarmItemRecord({
-    required this.id,
-    required this.hour,
-    required this.minute,
-    required this.displayTime,
-    required this.dateText,
-    required this.sequenceIndex,
-    required this.totalInGroup,
-    this.isSelected = false,
-  });
-}
-
-class AlarmGroupRecord {
-  final String id;
-  final String title;
-  final String initialTargetTime;
-  final int alarmCount;
-  final int intervalMinutes;
-  final DateTime createdAt;
-  final List<AlarmItemRecord> alarms;
-  bool isSelected;
-
-  AlarmGroupRecord({
-    required this.id,
-    required this.title,
-    required this.initialTargetTime,
-    required this.alarmCount,
-    required this.intervalMinutes,
-    required this.createdAt,
-    required this.alarms,
-    this.isSelected = false,
-  });
-}
-
-class QuickPresetItem {
-  final String label;
-  final int hours;
-  final int minutes;
-
-  QuickPresetItem({
-    required this.label,
-    required this.hours,
-    this.minutes = 0,
-  });
 }
 
 // ==========================================
@@ -167,26 +62,66 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentTabIndex = 0;
   final List<AlarmGroupRecord> _alarmGroups = [];
+  bool _isLoading = true;
 
-  void _addNewAlarmGroup(AlarmGroupRecord group) {
+  @override
+  void initState() {
+    super.initState();
+    _loadGroups();
+  }
+
+  Future<void> _loadGroups() async {
+    List<AlarmGroupRecord> groups = const [];
+    try {
+      groups = await AlarmDatabase.instance.loadGroups();
+    } catch (_) {
+      groups = const [];
+    }
+    if (!mounted) return;
     setState(() {
-      _alarmGroups.insert(0, group);
+      _alarmGroups
+        ..clear()
+        ..addAll(groups);
+      _isLoading = false;
     });
   }
 
-  void _deleteSingleAlarm(String groupId, String alarmId) {
+  Future<void> _addNewAlarmGroup(AlarmGroupRecord group) async {
+    try {
+      await AlarmDatabase.instance.saveGroup(group);
+    } catch (_) {
+      // Keep the in-memory record even if persistence fails.
+    }
+    if (!mounted) return;
+    setState(() => _alarmGroups.insert(0, group));
+  }
+
+  Future<void> _deleteSingleAlarm(String groupId, String alarmId) async {
     AlarmItemRecord? target;
     for (final grp in _alarmGroups) {
-      if (grp.id == groupId) {
-        for (final a in grp.alarms) {
-          if (a.id == alarmId) target = a;
+      if (grp.id != groupId) continue;
+      for (final alarm in grp.alarms) {
+        if (alarm.id == alarmId) {
+          target = alarm;
+          break;
         }
       }
     }
+
+    var dismissStarted = false;
     if (target != null) {
-      NativeClockService.dismissAlarm(hour: target.hour, minutes: target.minute);
+      final res = await NativeClockService.dismissAlarm(
+        hour: target.hour,
+        minutes: target.minute,
+      );
+      dismissStarted = res['success'] == true;
     }
 
+    try {
+      await AlarmDatabase.instance.deleteAlarm(groupId, alarmId);
+    } catch (_) {}
+
+    if (!mounted) return;
     setState(() {
       for (final grp in _alarmGroups) {
         if (grp.id == groupId) {
@@ -195,38 +130,82 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       }
       _alarmGroups.removeWhere((grp) => grp.alarms.isEmpty);
     });
-    _showDeleteNotice('Alarm removed from manager.');
+
+    _showDeleteNotice(
+      dismissStarted
+          ? 'Cancel request sent. Confirm in Realme Clock — this app cannot verify it.'
+          : 'Record removed here, but the Clock app may still keep this alarm.',
+    );
   }
 
-  void _deleteGroup(String groupId) {
+  Future<void> _deleteGroup(String groupId) async {
+    final alarms = <AlarmItemRecord>[];
     for (final grp in _alarmGroups) {
-      if (grp.id == groupId) {
-        for (final a in grp.alarms) {
-          NativeClockService.dismissAlarm(hour: a.hour, minutes: a.minute);
-        }
-      }
+      if (grp.id == groupId) alarms.addAll(grp.alarms);
     }
-    setState(() {
-      _alarmGroups.removeWhere((grp) => grp.id == groupId);
-    });
-    _showDeleteNotice('Alarm group removed from manager.');
+
+    var dismissCount = 0;
+    for (final alarm in alarms) {
+      final res = await NativeClockService.dismissAlarm(
+        hour: alarm.hour,
+        minutes: alarm.minute,
+      );
+      if (res['success'] == true) dismissCount++;
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+
+    try {
+      await AlarmDatabase.instance.deleteGroup(groupId);
+    } catch (_) {}
+
+    if (!mounted) return;
+    setState(() => _alarmGroups.removeWhere((grp) => grp.id == groupId));
+
+    _showDeleteNotice(
+      alarms.isNotEmpty && dismissCount == alarms.length
+          ? 'Cancel requests sent for ${alarms.length} alarm(s). Confirm in Realme Clock.'
+          : 'Group removed here. Some alarms may remain in Realme Clock.',
+    );
   }
 
-  void _deleteSelectedItems() {
+  Future<void> _deleteSelectedItems() async {
+    final fullySelectedGroups = <String>{};
+    final selectedAlarms = <AlarmItemRecord>[];
+
     for (final grp in _alarmGroups) {
       if (grp.isSelected) {
-        for (final a in grp.alarms) {
-          NativeClockService.dismissAlarm(hour: a.hour, minutes: a.minute);
-        }
+        fullySelectedGroups.add(grp.id);
+        selectedAlarms.addAll(grp.alarms);
       } else {
-        for (final a in grp.alarms.where((item) => item.isSelected)) {
-          NativeClockService.dismissAlarm(hour: a.hour, minutes: a.minute);
-        }
+        selectedAlarms.addAll(grp.alarms.where((a) => a.isSelected));
       }
     }
+    if (selectedAlarms.isEmpty) return;
+
+    var dismissCount = 0;
+    for (final alarm in selectedAlarms) {
+      final res = await NativeClockService.dismissAlarm(
+        hour: alarm.hour,
+        minutes: alarm.minute,
+      );
+      if (res['success'] == true) dismissCount++;
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+
+    try {
+      for (final groupId in fullySelectedGroups) {
+        await AlarmDatabase.instance.deleteGroup(groupId);
+      }
+      for (final alarm in selectedAlarms) {
+        if (fullySelectedGroups.contains(alarm.groupId)) continue;
+        await AlarmDatabase.instance.deleteAlarm(alarm.groupId, alarm.id);
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
     setState(() {
       for (final grp in _alarmGroups) {
-        if (grp.isSelected) {
+        if (fullySelectedGroups.contains(grp.id)) {
           grp.alarms.clear();
         } else {
           grp.alarms.removeWhere((a) => a.isSelected);
@@ -234,7 +213,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       }
       _alarmGroups.removeWhere((grp) => grp.alarms.isEmpty);
     });
-    _showDeleteNotice('Selected alarms removed from manager.');
+
+    _showDeleteNotice(
+      dismissCount == selectedAlarms.length
+          ? 'Cancel requests sent for ${selectedAlarms.length} alarm(s). Confirm in Realme Clock.'
+          : 'Removed here, but ${selectedAlarms.length - dismissCount} cancel request(s) failed. Check Realme Clock.',
+    );
   }
 
   void _showDeleteNotice(String message) {
@@ -245,6 +229,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         content: Text(message),
         backgroundColor: const Color(0xFF1E293B),
         behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 5),
         action: SnackBarAction(
           label: 'OPEN CLOCK',
           textColor: const Color(0xFF60A5FA),
@@ -267,18 +252,22 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ),
         ],
       ),
-      body: IndexedStack(
-        index: _currentTabIndex,
-        children: [
-          HomeScreen(onAlarmGroupCreated: _addNewAlarmGroup),
-          AlarmsTabScreen(
-            groups: _alarmGroups,
-            onDeleteAlarm: _deleteSingleAlarm,
-            onDeleteGroup: _deleteGroup,
-            onDeleteSelected: _deleteSelectedItems,
-          ),
-        ],
-      ),
+      body: _isLoading
+          ? const Center(
+              child: CircularProgressIndicator(color: Color(0xFF3B82F6)),
+            )
+          : IndexedStack(
+              index: _currentTabIndex,
+              children: [
+                HomeScreen(onAlarmGroupCreated: _addNewAlarmGroup),
+                AlarmsTabScreen(
+                  groups: _alarmGroups,
+                  onDeleteAlarm: _deleteSingleAlarm,
+                  onDeleteGroup: _deleteGroup,
+                  onDeleteSelected: _deleteSelectedItems,
+                ),
+              ],
+            ),
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
           border: Border(top: BorderSide(color: Color(0xFF1E293B), width: 1)),
@@ -318,7 +307,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 ],
               ),
               activeIcon: const Icon(Icons.format_list_bulleted),
-              label: 'Alarms',
+              label: 'Sent',
             ),
           ],
         ),
@@ -331,7 +320,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 // Tab 1: Home Screen
 // ==========================================
 class HomeScreen extends StatefulWidget {
-  final Function(AlarmGroupRecord) onAlarmGroupCreated;
+  final Future<void> Function(AlarmGroupRecord) onAlarmGroupCreated;
   const HomeScreen({super.key, required this.onAlarmGroupCreated});
 
   @override
@@ -389,6 +378,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _onWheelChanged() {
     if (_isSyncing) return;
     _isSyncing = true;
+    HapticFeedback.selectionClick();
 
     final hour12 = _hourWheelController.selectedItem + 1; // 1 to 12
     final minute = _minuteWheelController.selectedItem; // 0 to 59
@@ -408,7 +398,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       _targetTime = newTarget;
-      _durationHours = (totalMins / 60).floor().clamp(1, 12);
+      _durationHours = (totalMins ~/ 60).clamp(1, 12);
       final rawM = totalMins % 60;
       _durationMinutes = ((rawM / 5).round() * 5).clamp(0, 60);
     });
@@ -417,10 +407,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // 2. Relative Time -> Wheel Picker Sync
-  void _syncTargetFromDuration() {
-    if (_isSyncing) return;
-    _isSyncing = true;
-
+  Future<void> _syncTargetFromDuration() async {
     final now = DateTime.now();
     final newTarget = now.add(Duration(hours: _durationHours, minutes: _durationMinutes));
 
@@ -428,34 +415,43 @@ class _HomeScreenState extends State<HomeScreen> {
       _targetTime = newTarget;
     });
 
+    if (_isSyncing) return;
+    _isSyncing = true;
+
     final h12 = newTarget.hour % 12 == 0 ? 12 : newTarget.hour % 12;
     final hIndex = h12 - 1;
     final mIndex = newTarget.minute;
     final amPmIndex = newTarget.hour >= 12 ? 1 : 0;
 
-    if (_hourWheelController.hasClients && _hourWheelController.selectedItem != hIndex) {
-      _hourWheelController.animateToItem(
-        hIndex,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
-      );
+    try {
+      if (_hourWheelController.hasClients && _hourWheelController.selectedItem != hIndex) {
+        await _hourWheelController.animateToItem(
+          hIndex,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
+      }
+      if (_minuteWheelController.hasClients && _minuteWheelController.selectedItem != mIndex) {
+        await _minuteWheelController.animateToItem(
+          mIndex,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
+      }
+      if (_amPmWheelController.hasClients && _amPmWheelController.selectedItem != amPmIndex) {
+        await _amPmWheelController.animateToItem(
+          amPmIndex,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
+      }
+    } catch (_) {
+      // The picker can be disposed while the animation is running.
+    } finally {
+      // Keep the guard on across the whole animation so the picker callbacks
+      // do not overwrite the value the user just chose.
+      _isSyncing = false;
     }
-    if (_minuteWheelController.hasClients && _minuteWheelController.selectedItem != mIndex) {
-      _minuteWheelController.animateToItem(
-        mIndex,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
-      );
-    }
-    if (_amPmWheelController.hasClients && _amPmWheelController.selectedItem != amPmIndex) {
-      _amPmWheelController.animateToItem(
-        amPmIndex,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
-      );
-    }
-
-    _isSyncing = false;
   }
 
   // Add Custom Quick Preset Dialog
@@ -548,65 +544,91 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Dispatch Alarms to Realme Clock and save in Alarms tab
+  // Sends the chain to the Realme Clock app and records what happened.
   Future<void> _setTheAlarm() async {
+    if (_isDispatching) return;
     setState(() => _isDispatching = true);
 
-    final groupId = 'grp_${DateTime.now().millisecondsSinceEpoch}';
+    final now = DateTime.now();
+    final groupId = 'grp_${now.millisecondsSinceEpoch}';
     final childAlarms = <AlarmItemRecord>[];
     final timeFormat = DateFormat('hh:mm a');
-    final dateFormat = DateFormat('EEE, MMM d');
+    var delivered = 0;
 
-    for (int i = 0; i < _totalAlarms; i++) {
-      final alarmTime = _targetTime.add(Duration(minutes: i * _intervalMinutes));
-      final message = 'Alarm (${i + 1}/$_totalAlarms)';
+    try {
+      for (int i = 0; i < _totalAlarms; i++) {
+        final raw = _targetTime.add(Duration(minutes: i * _intervalMinutes));
+        // The Clock intent only accepts a time of day, so normalise seconds.
+        final alarmTime = DateTime(raw.year, raw.month, raw.day, raw.hour, raw.minute);
+        final message = 'Alarm ${i + 1}/$_totalAlarms';
 
-      await NativeClockService.setAlarm(
-        hour: alarmTime.hour,
-        minutes: alarmTime.minute,
-        message: message,
-        skipUi: true,
-        vibrate: true,
-      );
-
-      childAlarms.add(
-        AlarmItemRecord(
-          id: 'alm_${groupId}_$i',
+        final result = await NativeClockService.setAlarm(
           hour: alarmTime.hour,
-          minute: alarmTime.minute,
-          displayTime: timeFormat.format(alarmTime),
-          dateText: dateFormat.format(alarmTime),
-          sequenceIndex: i + 1,
-          totalInGroup: _totalAlarms,
-        ),
+          minutes: alarmTime.minute,
+          message: message,
+          skipUi: true,
+          vibrate: true,
+        );
+        final ok = result['success'] == true;
+        if (ok) delivered++;
+
+        childAlarms.add(
+          AlarmItemRecord(
+            id: 'alm_${groupId}_$i',
+            groupId: groupId,
+            scheduledAt: alarmTime,
+            sequenceIndex: i + 1,
+            totalInGroup: _totalAlarms,
+            delivered: ok,
+            targetPackage: result['targetPackage']?.toString(),
+            error: ok ? null : (result['error']?.toString() ?? 'Unknown error'),
+          ),
+        );
+
+        // Stagger requests so the Realme Clock queue is not flooded.
+        if (i < _totalAlarms - 1) {
+          await Future.delayed(const Duration(milliseconds: 350));
+        }
+      }
+
+      final newGroup = AlarmGroupRecord(
+        id: groupId,
+        title: 'Wake-up chain · $_totalAlarms alarms',
+        initialTargetTime: timeFormat.format(_targetTime),
+        alarmCount: _totalAlarms,
+        intervalMinutes: _intervalMinutes,
+        durationHours: _durationHours,
+        durationMinutes: _durationMinutes,
+        createdAt: now,
+        alarms: childAlarms,
       );
 
-      // Stagger delay for Realme Clock queue stability
-      await Future.delayed(const Duration(milliseconds: 350));
+      await widget.onAlarmGroupCreated(newGroup);
+    } finally {
+      if (mounted) setState(() => _isDispatching = false);
     }
 
-    final newGroup = AlarmGroupRecord(
-      id: groupId,
-      title: 'Wake Up Session ($_totalAlarms Alarms)',
-      initialTargetTime: timeFormat.format(_targetTime),
-      alarmCount: _totalAlarms,
-      intervalMinutes: _intervalMinutes,
-      createdAt: DateTime.now(),
-      alarms: childAlarms,
+    if (!mounted) return;
+
+    final failed = _totalAlarms - delivered;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          failed == 0
+              ? 'Sent $_totalAlarms alarm(s) to Realme Clock. Check the Clock app to confirm.'
+              : 'Sent $delivered of $_totalAlarms. $failed failed — open Clock to check.',
+        ),
+        backgroundColor:
+            failed == 0 ? const Color(0xFF2563EB) : const Color(0xFF9A3412),
+        behavior: SnackBarBehavior.floating,
+        action: SnackBarAction(
+          label: 'OPEN CLOCK',
+          textColor: const Color(0xFF93C5FD),
+          onPressed: () => NativeClockService.openClockApp(),
+        ),
+      ),
     );
-
-    widget.onAlarmGroupCreated(newGroup);
-    setState(() => _isDispatching = false);
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Successfully scheduled $_totalAlarms alarms in Realme Clock!'),
-          backgroundColor: const Color(0xFF2563EB),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
   }
 
   // 3. Total Number of Alarms: 6 rectangular selector-style tabs
@@ -822,7 +844,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                           onSelectedItemChanged: (index) {
-                            HapticFeedback.selectionClick();
                             _onWheelChanged();
                           },
                           children: List.generate(12, (i) {
@@ -870,7 +891,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                           onSelectedItemChanged: (index) {
-                            HapticFeedback.selectionClick();
                             _onWheelChanged();
                           },
                           children: List.generate(60, (i) {
@@ -906,7 +926,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                           onSelectedItemChanged: (index) {
-                            HapticFeedback.selectionClick();
                             _onWheelChanged();
                           },
                           children: const [
@@ -952,16 +971,6 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'RELATIVE TIME',
-                  style: TextStyle(
-                    color: Color(0xFF64748B),
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 14),
                 Row(
                   children: [
                     // Hour Selector (Left)
@@ -1005,10 +1014,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                   HapticFeedback.selectionClick();
                                   final newH = val.round();
                                   if (newH != _durationHours) {
-                                    setState(() => _durationHours = newH);
-                                    _syncTargetFromDuration();
+                                    final now = DateTime.now();
+                                    setState(() {
+                                      _durationHours = newH;
+                                      _targetTime = now.add(Duration(
+                                        hours: _durationHours,
+                                        minutes: _durationMinutes,
+                                      ));
+                                    });
                                   }
                                 },
+                                onChangeEnd: (_) => _syncTargetFromDuration(),
                               ),
                             ),
                             const Padding(
@@ -1068,10 +1084,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                   HapticFeedback.selectionClick();
                                   final newM = (val / 5).round() * 5;
                                   if (newM != _durationMinutes) {
-                                    setState(() => _durationMinutes = newM);
-                                    _syncTargetFromDuration();
+                                    final now = DateTime.now();
+                                    setState(() {
+                                      _durationMinutes = newM;
+                                      _targetTime = now.add(Duration(
+                                        hours: _durationHours,
+                                        minutes: _durationMinutes,
+                                      ));
+                                    });
                                   }
                                 },
+                                onChangeEnd: (_) => _syncTargetFromDuration(),
                               ),
                             ),
                             const Padding(
@@ -1204,6 +1227,360 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 24),
         ],
       ),
+    );
+  }
+}
+
+// ==========================================
+// Tab 2: Sent Alarms (audit list, not a live manager)
+// ==========================================
+class AlarmsTabScreen extends StatefulWidget {
+  final List<AlarmGroupRecord> groups;
+  final Future<void> Function(String groupId, String alarmId) onDeleteAlarm;
+  final Future<void> Function(String groupId) onDeleteGroup;
+  final Future<void> Function() onDeleteSelected;
+
+  const AlarmsTabScreen({
+    super.key,
+    required this.groups,
+    required this.onDeleteAlarm,
+    required this.onDeleteGroup,
+    required this.onDeleteSelected,
+  });
+
+  @override
+  State<AlarmsTabScreen> createState() => _AlarmsTabScreenState();
+}
+
+class _AlarmsTabScreenState extends State<AlarmsTabScreen> {
+  int get _selectedCount {
+    int count = 0;
+    for (final grp in widget.groups) {
+      if (grp.isSelected) {
+        count += grp.alarms.length;
+      } else {
+        count += grp.alarms.where((a) => a.isSelected).length;
+      }
+    }
+    return count;
+  }
+
+  void _toggleGroupSelection(AlarmGroupRecord grp, bool? value) {
+    setState(() {
+      grp.isSelected = value ?? false;
+      for (final a in grp.alarms) {
+        a.isSelected = grp.isSelected;
+      }
+    });
+  }
+
+  void _toggleAlarmSelection(AlarmGroupRecord grp, AlarmItemRecord alm, bool? value) {
+    setState(() {
+      alm.isSelected = value ?? false;
+      grp.isSelected = grp.alarms.every((a) => a.isSelected);
+    });
+  }
+
+  void _selectAll(bool select) {
+    setState(() {
+      for (final grp in widget.groups) {
+        grp.isSelected = select;
+        for (final a in grp.alarms) {
+          a.isSelected = select;
+        }
+      }
+    });
+  }
+
+  Future<void> _openClock() async {
+    final opened = await NativeClockService.openClockApp();
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not open the Clock app. Open it from your app drawer.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Color _statusColor(AlarmGroupRecord group) {
+    if (group.allDelivered) return const Color(0xFF22C55E);
+    if (group.noneDelivered) return const Color(0xFFEF4444);
+    return const Color(0xFFF59E0B);
+  }
+
+  String _statusText(AlarmGroupRecord group) {
+    if (group.allDelivered) return 'SENT';
+    if (group.noneDelivered) return 'FAILED';
+    return '${group.deliveredCount}/${group.alarmCount}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.groups.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF0F172A),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.alarm_off_outlined, size: 48, color: Color(0xFF64748B)),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Nothing sent yet',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Build a wake-up chain in Home and tap "Set Alarm".',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+              ),
+              const SizedBox(height: 16),
+              TextButton.icon(
+                onPressed: _openClock,
+                icon: const Icon(Icons.open_in_new, size: 16),
+                label: const Text('OPEN REALME CLOCK'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Container(
+          margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0F172A),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF1E293B)),
+          ),
+          child: const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.info_outline, size: 18, color: Color(0xFF60A5FA)),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'This is a record of what was sent. Realme Clock is the source of truth. '
+                  'Deleting here only asks the Clock app to cancel an alarm; this app cannot confirm it worked.',
+                  style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11, height: 1.4),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        if (_selectedCount > 0)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            color: const Color(0xFF1E293B),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '$_selectedCount selected',
+                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13),
+                ),
+                Row(
+                  children: [
+                    TextButton(
+                      onPressed: () => _selectAll(false),
+                      child: const Text('Deselect', style: TextStyle(color: Color(0xFF64748B))),
+                    ),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFDC2626),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      ),
+                      icon: const Icon(Icons.delete_outline, size: 16),
+                      label: const Text('Delete'),
+                      onPressed: () => widget.onDeleteSelected(),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            itemCount: widget.groups.length,
+            itemBuilder: (ctx, index) {
+              final group = widget.groups[index];
+              return Container(
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: group.isSelected ? const Color(0xFF3B82F6) : const Color(0xFF1E293B),
+                    width: 1.5,
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF131B2E),
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(17)),
+                      ),
+                      child: Row(
+                        children: [
+                          Checkbox(
+                            value: group.isSelected,
+                            activeColor: const Color(0xFF3B82F6),
+                            onChanged: (val) => _toggleGroupSelection(group, val),
+                          ),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  group.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
+                                ),
+                                Text(
+                                  'First: ${group.initialTargetTime} · ${group.intervalMinutes}m interval',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 11, color: Color(0xFF60A5FA)),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: _statusColor(group).withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: _statusColor(group).withOpacity(0.5)),
+                            ),
+                            child: Text(
+                              _statusText(group),
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                color: _statusColor(group),
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_sweep_outlined, color: Color(0xFFEF4444), size: 20),
+                            tooltip: 'Delete group',
+                            onPressed: () => widget.onDeleteGroup(group.id),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    ...group.alarms.map((alarm) {
+                      final alarmColor = !alarm.delivered
+                          ? const Color(0xFFF59E0B)
+                          : alarm.isPast
+                              ? const Color(0xFF64748B)
+                              : Colors.white;
+                      return Column(
+                        children: [
+                          ListTile(
+                            dense: true,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                            leading: Checkbox(
+                              value: alarm.isSelected,
+                              activeColor: const Color(0xFF3B82F6),
+                              onChanged: (val) => _toggleAlarmSelection(group, alarm, val),
+                            ),
+                            title: Row(
+                              children: [
+                                Text(
+                                  alarm.displayTime,
+                                  style: TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.bold,
+                                    color: alarmColor,
+                                    fontFamily: 'monospace',
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF1E293B),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    '#${alarm.sequenceIndex} of ${alarm.totalInGroup}',
+                                    style: const TextStyle(fontSize: 10, color: Color(0xFF64748B)),
+                                  ),
+                                ),
+                                if (alarm.isPast) ...[
+                                  const SizedBox(width: 6),
+                                  const Text(
+                                    'PAST',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF64748B),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            subtitle: Text(
+                              alarm.delivered
+                                  ? alarm.dateText
+                                  : '${alarm.dateText} · not confirmed: ${alarm.error ?? 'unknown error'}',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: alarm.delivered ? const Color(0xFF94A3B8) : const Color(0xFFF59E0B),
+                              ),
+                            ),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.close, color: Color(0xFF64748B), size: 18),
+                              tooltip: 'Delete alarm',
+                              onPressed: () => widget.onDeleteAlarm(group.id, alarm.id),
+                            ),
+                          ),
+                          if (alarm != group.alarms.last)
+                            const Divider(color: Color(0xFF1E293B), height: 1),
+                        ],
+                      );
+                    }),
+
+                    if (group.failedCount > 0)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+                        child: Text(
+                          '${group.failedCount} alarm(s) were not confirmed. Open the Clock app and set them manually.',
+                          style: const TextStyle(fontSize: 10, color: Color(0xFFF59E0B)),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }
