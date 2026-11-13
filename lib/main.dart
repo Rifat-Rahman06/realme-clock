@@ -95,19 +95,13 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isSyncing = false;
 
   // Options
-  int _totalAlarms = 4; // Default selected
+  int _totalAlarms = 1; // One alarm by default
   int _intervalMinutes = 5; // Default selected
   bool _isDispatching = false;
 
-  // Presets list (user-editable)
-  final List<QuickPresetItem> _presets = [
-    QuickPresetItem(label: '1h', hours: 1),
-    QuickPresetItem(label: '2h', hours: 2),
-    QuickPresetItem(label: '4h', hours: 4),
-    QuickPresetItem(label: '6h', hours: 6),
-    QuickPresetItem(label: '7h 30m', hours: 7, minutes: 30),
-    QuickPresetItem(label: '8h', hours: 8),
-  ];
+  // Presets are fully user-managed.
+  final List<QuickPresetItem> _presets = [];
+  bool _isEditingPresets = false;
 
   @override
   void initState() {
@@ -116,12 +110,13 @@ class _HomeScreenState extends State<HomeScreen> {
     _targetTime = now.add(Duration(hours: _durationHours, minutes: _durationMinutes));
 
     final h12 = _targetTime.hour % 12 == 0 ? 12 : _targetTime.hour % 12;
-    // Large starting offsets give the looping pickers room to scroll backwards
-    // while still showing the correct value (the delegate maps by modulo).
+    // Large starting offsets give the looping hour and minute pickers room to
+    // scroll backwards while still showing the correct value (the delegate
+    // maps by modulo).
     _hourWheelController = FixedExtentScrollController(initialItem: (h12 - 1) + 1200);
     _minuteWheelController = FixedExtentScrollController(initialItem: _targetTime.minute + 1200);
     _amPmWheelController = FixedExtentScrollController(
-      initialItem: (_targetTime.hour >= 12 ? 1 : 0) + 1000,
+      initialItem: _targetTime.hour >= 12 ? 1 : 0,
     );
   }
 
@@ -142,7 +137,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final hourIndex = _hourWheelController.selectedItem % 12;
     final hour12 = hourIndex + 1; // 1 to 12
     final minute = _minuteWheelController.selectedItem % 60; // 0 to 59
-    final isPm = (_amPmWheelController.selectedItem % 2) == 1;
+    final isPm = _amPmWheelController.selectedItem == 1;
 
     int hour24 = hour12 % 12;
     if (isPm) hour24 += 12;
@@ -219,15 +214,13 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         }
       }
-      if (_amPmWheelController.hasClients) {
-        final target = _nearestLoopIndex(_amPmWheelController.selectedItem, amPmIndex, 2);
-        if (_amPmWheelController.selectedItem != target) {
-          await _amPmWheelController.animateToItem(
-            target,
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOut,
-          );
-        }
+      if (_amPmWheelController.hasClients &&
+          _amPmWheelController.selectedItem != amPmIndex) {
+        await _amPmWheelController.animateToItem(
+          amPmIndex,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
       }
     } catch (_) {
       // The picker can be disposed while the animation is running.
@@ -239,10 +232,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // Add Custom Quick Preset Dialog
-  void _showAddPresetDialog() {
-    int inputHours = 3;
-    int inputMinutes = 0;
-    final textController = TextEditingController();
+  void _showAddPresetDialog({QuickPresetItem? existing}) {
+    final isEditing = existing != null;
+    int inputHours = existing?.hours ?? 3;
+    int inputMinutes = existing?.minutes ?? 0;
+    final textController = TextEditingController(text: existing?.label ?? '');
 
     showDialog(
       context: context,
@@ -267,25 +261,34 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: const Color(0xFF3B82F6).withOpacity(0.15),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(Icons.bolt_rounded, color: Color(0xFF60A5FA), size: 20),
+                    child: Icon(
+                      isEditing ? Icons.edit_outlined : Icons.bolt_rounded,
+                      color: const Color(0xFF60A5FA),
+                      size: 20,
+                    ),
                   ),
                   const SizedBox(width: 12),
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'New Quick Preset',
-                          style: TextStyle(
+                          isEditing ? 'Edit Quick Preset' : 'New Quick Preset',
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
-                        SizedBox(height: 2),
+                        const SizedBox(height: 2),
                         Text(
-                          'Name it, then choose the delay.',
-                          style: TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                          isEditing
+                              ? 'Update the name or delay.'
+                              : 'Name it, then choose the delay.',
+                          style: const TextStyle(
+                            color: Color(0xFF64748B),
+                            fontSize: 12,
+                          ),
                         ),
                       ],
                     ),
@@ -415,21 +418,24 @@ class _HomeScreenState extends State<HomeScreen> {
                       ? null
                       : () {
                           final typed = textController.text.trim();
+                          final updated = QuickPresetItem(
+                            label: typed.isEmpty ? previewLabel : typed,
+                            hours: inputHours,
+                            minutes: inputMinutes,
+                          );
                           setState(() {
-                            _presets.add(
-                              QuickPresetItem(
-                                label: typed.isEmpty ? previewLabel : typed,
-                                hours: inputHours,
-                                minutes: inputMinutes,
-                                isCustom: true,
-                              ),
-                            );
+                            if (existing != null) {
+                              final index = _presets.indexOf(existing);
+                              if (index != -1) _presets[index] = updated;
+                            } else {
+                              _presets.add(updated);
+                            }
                           });
                           Navigator.pop(ctx);
                         },
-                  child: const Text(
-                    'Add Preset',
-                    style: TextStyle(fontWeight: FontWeight.bold),
+                  child: Text(
+                    isEditing ? 'Save Changes' : 'Add Preset',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
@@ -723,7 +729,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final dateFormat = DateFormat('EEE, MMM d');
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -855,7 +861,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: CupertinoPicker(
                           itemExtent: 40,
                           scrollController: _amPmWheelController,
-                          looping: true,
                           selectionOverlay: Container(
                             decoration: BoxDecoration(
                               color: const Color(0xFF2563EB).withOpacity(0.18),
@@ -902,7 +907,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
           // 2. Relative Time Selector (Side by side Hour & Minute with Stepped Sliders)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
             decoration: BoxDecoration(
               color: const Color(0xFF0F172A),
               borderRadius: BorderRadius.circular(20),
@@ -916,7 +921,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     // Hour Selector (Left)
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 12),
                         decoration: BoxDecoration(
                           color: const Color(0xFF131B2E),
                           borderRadius: BorderRadius.circular(16),
@@ -941,6 +946,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 thumbColor: const Color(0xFF60A5FA),
                                 overlayColor: const Color(0xFF3B82F6).withOpacity(0.15),
                                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12),
+                                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
                                 tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 3),
                                 activeTickMarkColor: Colors.white70,
                                 inactiveTickMarkColor: const Color(0xFF334155),
@@ -982,11 +988,11 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 4),
                     // Minute Selector (Right)
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 12),
                         decoration: BoxDecoration(
                           color: const Color(0xFF131B2E),
                           borderRadius: BorderRadius.circular(16),
@@ -1011,6 +1017,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 thumbColor: const Color(0xFF60A5FA),
                                 overlayColor: const Color(0xFF3B82F6).withOpacity(0.15),
                                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12),
+                                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
                                 tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 3),
                                 activeTickMarkColor: Colors.white70,
                                 inactiveTickMarkColor: const Color(0xFF334155),
@@ -1091,17 +1098,61 @@ class _HomeScreenState extends State<HomeScreen> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'QUICK PRESETS',
-                style: TextStyle(
-                  color: Color(0xFF64748B),
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.2,
-                ),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'QUICK PRESETS',
+                      style: TextStyle(
+                        color: Color(0xFF64748B),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: () {
+                      setState(() => _isEditingPresets = !_isEditingPresets);
+                    },
+                    icon: Icon(
+                      _isEditingPresets ? Icons.check_rounded : Icons.edit_outlined,
+                      size: 15,
+                    ),
+                    label: Text(_isEditingPresets ? 'Done' : 'Edit'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: _isEditingPresets
+                          ? const Color(0xFF60A5FA)
+                          : const Color(0xFF94A3B8),
+                      backgroundColor: _isEditingPresets
+                          ? const Color(0xFF3B82F6).withOpacity(0.12)
+                          : Colors.transparent,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 10),
-              Wrap(
+              if (_presets.isEmpty && !_isEditingPresets)
+                const Text(
+                  'No presets yet. Tap Edit to create one.',
+                  style: TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                ),
+              if (_isEditingPresets && _presets.isNotEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'Tap a preset to edit it, or × to delete.',
+                    style: TextStyle(color: Color(0xFF64748B), fontSize: 11),
+                  ),
+                ),
+              if (_presets.isNotEmpty || _isEditingPresets)
+                Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
@@ -1118,26 +1169,28 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       child: Material(
                         color: Colors.transparent,
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(12),
-                          onTap: () {
-                            setState(() {
-                              _durationHours = preset.hours;
-                              _durationMinutes = preset.minutes;
-                            });
-                            _syncTargetFromDuration();
-                          },
-                          child: Padding(
-                            padding: EdgeInsets.only(
-                              left: 14,
-                              right: preset.isCustom ? 6 : 14,
-                              top: 10,
-                              bottom: 10,
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: _isEditingPresets
+                                  ? () => _showAddPresetDialog(existing: preset)
+                                  : () {
+                                      setState(() {
+                                        _durationHours = preset.hours;
+                                        _durationMinutes = preset.minutes;
+                                      });
+                                      _syncTargetFromDuration();
+                                    },
+                              child: Padding(
+                                padding: EdgeInsets.only(
+                                  left: 14,
+                                  right: _isEditingPresets ? 8 : 14,
+                                  top: 10,
+                                  bottom: 10,
+                                ),
+                                child: Text(
                                   preset.label,
                                   style: TextStyle(
                                     color: isCurrent ? Colors.white : const Color(0xFF94A3B8),
@@ -1145,54 +1198,58 @@ class _HomeScreenState extends State<HomeScreen> {
                                     fontSize: 12,
                                   ),
                                 ),
-                                if (preset.isCustom) ...[
-                                  const SizedBox(width: 2),
-                                  InkWell(
-                                    borderRadius: BorderRadius.circular(20),
-                                    onTap: () => _deletePreset(preset),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(4),
-                                      child: Icon(
-                                        Icons.close_rounded,
-                                        size: 14,
-                                        color: isCurrent
-                                            ? Colors.white70
-                                            : const Color(0xFF64748B),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ],
+                              ),
                             ),
-                          ),
+                            if (_isEditingPresets)
+                              InkWell(
+                                borderRadius: BorderRadius.circular(20),
+                                onTap: () => _deletePreset(preset),
+                                child: Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: 2,
+                                    right: 8,
+                                    top: 8,
+                                    bottom: 8,
+                                  ),
+                                  child: Icon(
+                                    Icons.close_rounded,
+                                    size: 14,
+                                    color: isCurrent
+                                        ? Colors.white70
+                                        : const Color(0xFF64748B),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     );
                   }),
-                  // Plus (+) Button to Add Preset
-                  InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: _showAddPresetDialog,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0F172A),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFF3B82F6).withOpacity(0.4)),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.add, size: 14, color: Color(0xFF60A5FA)),
-                          SizedBox(width: 4),
-                          Text(
-                            'Add',
-                            style: TextStyle(color: Color(0xFF60A5FA), fontSize: 12, fontWeight: FontWeight.bold),
-                          ),
-                        ],
+                  // Add is only available while editing presets.
+                  if (_isEditingPresets)
+                    InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => _showAddPresetDialog(),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0F172A),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFF3B82F6).withOpacity(0.4)),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.add, size: 14, color: Color(0xFF60A5FA)),
+                            SizedBox(width: 4),
+                            Text(
+                              'Add',
+                              style: TextStyle(color: Color(0xFF60A5FA), fontSize: 12, fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ],

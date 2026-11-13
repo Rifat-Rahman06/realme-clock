@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Alarm bells -->
+    <path
+        android:pathData="M27,35 A7,7 0 0,1 41,35 Z"
+        android:fillColor="#38BDF8" />
+    <path
+        android:pathData="M67,35 A7,7 0 0,1 81,35 Z"
+        android:fillColor="#38BDF8" />
+
+    <!-- Top button -->
+    <path
+        android:pathData="M54,34 L54,30"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,28 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0"
+        android:fillColor="#38BDF8" />
+
+    <!-- Legs -->
+    <path
+        android:pathData="M41,79 L37,86"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M67,79 L71,86"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+
+    <!-- Clock bezel -->
+    <path
+        android:pathData="M54,57 m-24,0 a24,24 0 1,0 48,0 a24,24 0 1,0 -48,0"
+        android:fillColor="#00000000"
+        android:strokeColor="#E0F2FE"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+
+    <!-- Tick marks -->
+    <path
+        android:pathData="M54,41 L54,37 M70,57 L74,57 M54,73 L54,77 M38,57 L34,57"
+        android:strokeColor="#93C5FD"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round" />
+
+    <!-- Clock hands -->
+    <path
+        android:pathData="M54,57 L46,50"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,57 L64,48"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round" />
+
+    <!-- Center pin -->
+    <path
+        android:pathData="M54,57 m-3.5,0 a3.5,3.5 0 1,0 7,0 a3.5,3.5 0 1,0 -7,0"
+        android:fillColor="#FFFFFF" />
+</vector>

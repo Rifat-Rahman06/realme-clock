@@ -23,9 +23,10 @@
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
-        android:label="Custom Alarm Manager"
+        android:label="Alarm Manager"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/app_icon"
+        android:roundIcon="@mipmap/app_icon">
         
         <activity
             android:name=".MainActivity"
