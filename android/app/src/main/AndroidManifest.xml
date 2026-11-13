@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.example.realme_alarm_manager">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Standard Android permission for scheduling alarms via system clock -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />

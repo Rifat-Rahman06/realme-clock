@@ -1,62 +1,159 @@
-# Realme X Alarm Manager
+# Alarm Manager
 
-Target device: Realme X (China ROM RMX1901) — Android 11.
+A small Flutter app for the **Realme X** (China ROM, Android 11) that sends a
+silent, one-time alarm chain to the phone's built-in Clock app.
+
+<p align="center">
+  <img src="docs/icon.png" width="140" alt="Alarm Manager app icon">
+</p>
 
 ## What it does
 
-- Build a wake-up chain: pick the actual alarm time with the embedded wheel
-  picker, choose how many alarms you want (1x–6x) and the interval between
-  them (2–15 minutes).
-- Tap **Set Alarm** to send the chain to the phone's own Clock app
-  (`com.coloros.alarm` / `com.heytap.deskclock` / AOSP / Google Clock).
-- The app is a dispatcher only. Realme Clock remains the alarm owner and the
-  source of truth. Android has no public API to read the Clock app's alarm
-  list, so this app cannot verify or manage those alarms afterwards. Always
-  confirm the alarms in the Clock app.
-- There is no alarm deletion or “Sent” history in the app. Use the Clock app
-  itself if you need to remove an alarm.
+- Pick the actual alarm time with an embedded 12-hour wheel picker: the hour
+  and minute wheels wrap continuously, while AM/PM is a two-option wheel.
+- Choose a relative delay with the hour (0–12 h) and minute (0–60 m, in
+  5-minute steps) sliders.
+- Send **1x–6x** alarms, spaced 2/3/5/10/15 minutes apart. The interval
+  selector is disabled when 1x is selected.
+- Save your own **Quick Presets**. Normal mode only selects a preset; **Edit**
+  mode adds, changes, or deletes presets, with Undo.
+- Presets are stored in `quick_presets.json` in the app's private files
+  directory and restored on the next launch.
+- The top-bar open-in-new icon opens the Realme Clock app so you can check
+  the alarms.
 
-## How to build the APK with GitHub Actions
+The app is a **dispatcher only**. The Realme Clock app owns the alarms and is
+the source of truth. Android does not expose a public API for reading or
+deleting another app's alarms, so Alarm Manager cannot verify or manage them
+after they are sent. The app does not keep a sent-alarm history.
 
-1. Upload these files to a GitHub repository.
-2. GitHub automatically triggers `.github/workflows/build.yaml`.
-3. After a couple of minutes, open the **Actions** tab and download the
-   `realme-x-alarm-release-apk` artifact.
+## Requirements
 
-The workflow runs `flutter create --overwrite` to generate the Android Gradle
-scaffold because this repository only ships the custom manifest, Kotlin bridge
-and Dart code.
+- Flutter 3.19.x (the version this project was built with; Dart 3.x)
+- Android SDK / Android Studio for local builds
+- A Realme X (RMX1901, ColorOS 11 / Android 11), or a compatible Android
+  device with a Clock app that handles `AlarmClock.ACTION_SET_ALARM`
 
-## UI layout
+## Getting started
 
-The app has a single full-screen Home page. The top bar shows **Alarm Manager**
-and an open-in-new icon that launches the Realme Clock app.
+This repository is a complete Flutter Android project, so no `flutter create`
+step is needed.
 
-1. **Actual Alarm Time** — directly embedded Flutter wheel picker (no bottom
-   sheet): hour (1–12) and minute (00–59) wrap around continuously; AM/PM is a
-   simple two-option wheel without wrapping.
-2. **Relative time** — hour selector (0–12 h) and minute selector (0–60 m in
-   5-minute steps), side by side with stepped sliders. The sliders use minimal
-   padding so they extend across the card. Selecting 0 hours lets you schedule
-   a chain in minutes only.
-3. **Total alarms** — six rectangular selector tabs (1x–6x), defaulting to 1x.
-4. **Alarm interval** — five rectangular selector tabs (2, 3, 5, 10, 15 m).
-   The interval is disabled by default and becomes active only when 2x or more
-   alarms are selected.
-5. **Set Alarm** button, followed by **Quick Presets**.
-6. **Quick Presets** — there are no built-in presets. In normal mode a preset
-   is only selectable. Tap **Edit** to enter edit mode, where you can add
-   presets, tap a preset to change its label/delay, or tap its **×** to delete
-   it (with Undo). Tap **Done** to return to normal selection mode.
+```bash
+flutter pub get
+flutter run
+```
 
-Presets are saved locally in `quick_presets.json` inside the app's private
-files directory and are restored on launch. No SQL database is used.
+Build a release APK:
 
-## Permissions and limits
+```bash
+flutter build apk --release
+```
 
-- `SET_ALARM` lets the app hand a time of day to the system Clock app.
-- The alarm is dispatched with `EXTRA_SKIP_UI=true` and without repeat days,
-  so it is intended as a single-occurrence alarm.
-- Some Realme/ColorOS builds may ignore parts of the intent or apply their own
-  defaults. The app reports only whether the intent was accepted, not whether
-  the Clock app actually stored the alarm.
+The APK is written to `build/app/outputs/flutter-apk/app-release.apk`.
+
+> The release build currently signs with the debug key so it can be installed
+> directly. Create a proper signing config before distributing it.
+
+## Project structure
+
+```
+android/                    Complete Android/Gradle project
+  app/src/main/
+    AndroidManifest.xml     App name, icon, SET_ALARM permission and queries
+    kotlin/.../MainActivity.kt
+                            Sends SET_ALARM intents and exposes the preset path
+    res/                    Custom adaptive launcher icon and launch theme
+lib/
+  main.dart                 Single-screen Home UI
+  models/alarm_models.dart
+  services/native_clock_service.dart
+  services/preset_store.dart
+docs/icon.png               App icon for the README
+tools/test_realme_x.sh      Optional ADB checks for the target phone
+```
+
+## How the alarm chain works
+
+Each alarm is sent to the Clock app with `AlarmClock.ACTION_SET_ALARM`:
+
+- `EXTRA_HOUR` / `EXTRA_MINUTES` — the calculated alarm time
+- `EXTRA_MESSAGE` — `Alarm i/N`
+- `EXTRA_SKIP_UI` — `true` (silent dispatch)
+- `EXTRA_VIBRATE` — `true`
+- no `EXTRA_DAYS` — intended as a one-shot alarm
+
+Requests are sent 350 ms apart so the Clock app can process each one. The app
+tries the known Realme/ColorOS packages first (`com.coloros.alarm`,
+`com.heytap.deskclock`), then falls back to AOSP/Google Clock or the system
+default handler.
+
+The result shown by the app means only that Android accepted the intent. It
+does not prove that Realme Clock stored the alarm. Always confirm the alarms
+in the Clock app.
+
+## Preset storage
+
+Presets are stored as a JSON array:
+
+```json
+[
+  { "label": "Wake up", "hours": 8, "minutes": 0 },
+  { "label": "Snooze", "hours": 0, "minutes": 10 }
+]
+```
+
+The file lives at:
+
+```
+/data/user/0/com.example.realme_alarm_manager/files/quick_presets.json
+```
+
+The path is provided by the Kotlin bridge. No SQL database or extra storage
+package is used.
+
+## Permissions
+
+- `com.android.alarm.permission.SET_ALARM` — hand an alarm request to the
+  Clock app.
+- `VIBRATE` — request a vibrating alarm (the Clock app may ignore it).
+- `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — optional prompt to keep ColorOS
+  from restricting the app. The app itself does not run a background service.
+- Android 11 package visibility is handled with `<queries>` entries for the
+  known Clock apps.
+
+## Known limitations
+
+- The app cannot read, verify, edit, or delete alarms owned by the Clock app.
+- Some Realme/ColorOS builds ignore parts of the intent or apply their own
+  defaults.
+- Alarms created by an intent without repeat days and with `EXTRA_SKIP_UI`
+  may be treated as one-shot alarms by Realme Clock and can disappear after
+  they ring or are stopped. Manually created alarms behave differently.
+- The UI is designed for the Realme X screen and has not been verified on
+  other devices.
+
+## Testing on the target phone
+
+`tools/test_realme_x.sh` contains optional ADB commands to:
+
+- list the installed Clock packages,
+- fire a manual `SET_ALARM` intent,
+- open the Realme Clock app,
+- check the app's battery-optimization whitelist status.
+
+Run the commands from the repository root after connecting the phone with USB
+debugging enabled.
+
+## Notes
+
+- Application ID: `com.example.realme_alarm_manager`. Change it (and the
+  Kotlin package/manifest references) before publishing under a different
+  identity.
+- The launcher label is **Alarm Manager**.
+- This project is not affiliated with Realme or ColorOS.
+
+## License
+
+This is a personal project. Add an appropriate license if you plan to publish
+or redistribute it.
