@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import 'models/alarm_models.dart';
 import 'services/native_clock_service.dart';
+import 'services/preset_store.dart';
 
 void main() {
   runApp(const RealmeAlarmApp());
@@ -99,13 +102,17 @@ class _HomeScreenState extends State<HomeScreen> {
   int _intervalMinutes = 5; // Default selected
   bool _isDispatching = false;
 
-  // Presets are fully user-managed.
+  // Presets are fully user-managed and persisted to a small JSON file.
   final List<QuickPresetItem> _presets = [];
+  final PresetStore _presetStore = PresetStore();
+  bool _presetsLoaded = false;
   bool _isEditingPresets = false;
 
   @override
   void initState() {
     super.initState();
+    unawaited(_loadPresets());
+
     final now = DateTime.now();
     _targetTime = now.add(Duration(hours: _durationHours, minutes: _durationMinutes));
 
@@ -126,6 +133,28 @@ class _HomeScreenState extends State<HomeScreen> {
     _minuteWheelController.dispose();
     _amPmWheelController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadPresets() async {
+    final loaded = await _presetStore.load();
+    if (!mounted) return;
+
+    setState(() {
+      for (final preset in loaded) {
+        final alreadyPresent = _presets.any((existing) =>
+            existing.label == preset.label &&
+            existing.hours == preset.hours &&
+            existing.minutes == preset.minutes);
+        if (!alreadyPresent) {
+          _presets.add(preset);
+        }
+      }
+      _presetsLoaded = true;
+    });
+  }
+
+  void _savePresets() {
+    unawaited(_presetStore.save(List<QuickPresetItem>.of(_presets)));
   }
 
   // 1. Wheel Picker -> Relative Time Sync
@@ -431,6 +460,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               _presets.add(updated);
                             }
                           });
+                          _savePresets();
                           Navigator.pop(ctx);
                         },
                   child: Text(
@@ -475,6 +505,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (index == -1) return;
 
     setState(() => _presets.removeAt(index));
+    _savePresets();
 
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -489,6 +520,7 @@ class _HomeScreenState extends State<HomeScreen> {
             if (!mounted) return;
             final restoreAt = index > _presets.length ? _presets.length : index;
             setState(() => _presets.insert(restoreAt, preset));
+            _savePresets();
           },
         ),
       ),
@@ -1138,7 +1170,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
               const SizedBox(height: 10),
-              if (_presets.isEmpty && !_isEditingPresets)
+              if (_presetsLoaded && _presets.isEmpty && !_isEditingPresets)
                 const Text(
                   'No presets yet. Tap Edit to create one.',
                   style: TextStyle(color: Color(0xFF64748B), fontSize: 12),

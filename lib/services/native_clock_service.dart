@@ -76,4 +76,13 @@ class NativeClockService {
       // The system dialog may not exist on every ROM. Nothing else to do.
     }
   }
+
+  /// Absolute path of the small JSON file used for quick presets.
+  static Future<String?> getPresetStoragePath() async {
+    try {
+      return await _channel.invokeMethod<String>('getPresetStoragePath');
+    } catch (_) {
+      return null;
+    }
+  }
 }

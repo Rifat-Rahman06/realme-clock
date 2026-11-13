@@ -12,6 +12,7 @@ import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.example.realme_alarm/native_clock"
@@ -53,6 +54,11 @@ class MainActivity: FlutterActivity() {
                 "requestIgnoreBatteryOptimization" -> {
                     requestBatteryOptimizationExemption()
                     result.success(true)
+                }
+                "getPresetStoragePath" -> {
+                    // App-private files directory: persistent across restarts.
+                    val presetFile = File(filesDir, "quick_presets.json")
+                    result.success(presetFile.absolutePath)
                 }
                 else -> {
                     result.notImplemented()

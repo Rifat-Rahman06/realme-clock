@@ -49,6 +49,9 @@ and an open-in-new icon that launches the Realme Clock app.
    presets, tap a preset to change its label/delay, or tap its **×** to delete
    it (with Undo). Tap **Done** to return to normal selection mode.
 
+Presets are saved locally in `quick_presets.json` inside the app's private
+files directory and are restored on launch. No SQL database is used.
+
 ## Permissions and limits
 
 - `SET_ALARM` lets the app hand a time of day to the system Clock app.
