@@ -13,9 +13,6 @@
         <intent>
             <action android:name="android.intent.action.SHOW_ALARMS" />
         </intent>
-        <intent>
-            <action android:name="android.intent.action.DISMISS_ALARM" />
-        </intent>
         <package android:name="com.coloros.alarm" />
         <package android:name="com.heytap.deskclock" />
         <package android:name="com.android.deskclock" />

@@ -38,33 +38,7 @@ class NativeClockService {
     }
   }
 
-  /// Best-effort request to disable a pending alarm.
-  ///
-  /// The platform only tells us that the dismiss activity was started. It
-  /// cannot confirm that the Clock app actually found and removed the alarm.
-  static Future<Map<String, dynamic>> dismissAlarm({
-    required int hour,
-    required int minutes,
-  }) async {
-    try {
-      final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
-        'dismissAlarm',
-        {
-          'hour': hour,
-          'minutes': minutes,
-          // false = AM, true = PM. Keeps 12-hour clocks from guessing.
-          'isPm': hour >= 12,
-        },
-      );
-      return Map<String, dynamic>.from(result ?? <dynamic, dynamic>{});
-    } on PlatformException catch (e) {
-      return {'success': false, 'error': e.message ?? 'PlatformException'};
-    } catch (e) {
-      return {'success': false, 'error': e.toString()};
-    }
-  }
-
-  /// Opens the Clock app so the user can verify or delete alarms manually.
+  /// Opens the Clock app so the user can verify the alarms.
   static Future<bool> openClockApp() async {
     try {
       final res = await _channel.invokeMethod<bool>('openClockApp');

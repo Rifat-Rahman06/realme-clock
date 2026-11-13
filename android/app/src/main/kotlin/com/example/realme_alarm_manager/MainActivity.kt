@@ -38,13 +38,6 @@ class MainActivity: FlutterActivity() {
                     val response = dispatchAlarmIntent(hour, minutes, message, skipUi, vibrate)
                     result.success(response)
                 }
-                "dismissAlarm" -> {
-                    val hour = call.argument<Int>("hour") ?: 0
-                    val minutes = call.argument<Int>("minutes") ?: 0
-                    val isPm = call.argument<Boolean>("isPm") ?: (hour >= 12)
-                    val response = dispatchDismissAlarmIntent(hour, minutes, isPm)
-                    result.success(response)
-                }
                 "openClockApp" -> {
                     val opened = openRealmeClock()
                     result.success(opened)
@@ -119,52 +112,6 @@ class MainActivity: FlutterActivity() {
             "success" to false,
             "dispatched" to false,
             "error" to "No compatible Clock application found on this Realme device."
-        )
-    }
-
-    private fun dispatchDismissAlarmIntent(hour: Int, minutes: Int, isPm: Boolean): Map<String, Any> {
-        val intent = Intent(AlarmClock.ACTION_DISMISS_ALARM).apply {
-            putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_TIME)
-            putExtra(AlarmClock.EXTRA_HOUR, hour)
-            putExtra(AlarmClock.EXTRA_MINUTES, minutes)
-            // Disambiguates 12-hour clock apps. false = AM, true = PM.
-            putExtra(AlarmClock.EXTRA_IS_PM, isPm)
-            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-
-        for (pkg in REALME_CLOCK_PACKAGES) {
-            val targetedIntent = Intent(intent).setPackage(pkg)
-            if (packageManager.resolveActivity(targetedIntent, 0) != null) {
-                return try {
-                    startActivity(targetedIntent)
-                    mapOf(
-                        "success" to true,
-                        "targetPackage" to pkg,
-                        "note" to "Dismiss request sent to $pkg. Verify in the Clock app."
-                    )
-                } catch (e: Exception) {
-                    mapOf(
-                        "success" to false,
-                        "targetPackage" to pkg,
-                        "error" to (e.localizedMessage ?: "Failed to start dismiss intent")
-                    )
-                }
-            }
-        }
-
-        if (packageManager.resolveActivity(intent, 0) != null) {
-            return try {
-                startActivity(intent)
-                mapOf("success" to true, "targetPackage" to "android.default")
-            } catch (e: Exception) {
-                mapOf("success" to false, "error" to (e.localizedMessage ?: "Failed to start dismiss intent"))
-            }
-        }
-
-        return mapOf(
-            "success" to false,
-            "error" to "No compatible Clock application found to dismiss this alarm."
         )
     }
 
